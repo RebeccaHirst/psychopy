@@ -68,6 +68,7 @@ Other stimuli:
 * :class:`.Slider` a new improved class to collect ratings
 * :class:`.RatingScale` to collect ratings
 * :class:`.CustomMouse` to change the cursor in windows with GUI. OBS: will be deprecated soon
+* :class:`.Form` to gather survey or questionnaire type responses
 
 Meta stimuli (stimuli that operate on other stimuli):
 
