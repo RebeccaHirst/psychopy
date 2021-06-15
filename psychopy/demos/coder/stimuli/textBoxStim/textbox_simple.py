@@ -3,9 +3,7 @@
 Shows how to create two textBox stim and present them. The first textbox
 simply displays the text provided, centered. The second textbox shows more
 of the configuration options available for the stim type.
-
 Created on Thu Mar 21 18:37:10 2013
-
 @author: Sol
 """
 from psychopy import visual, core, event
@@ -15,9 +13,9 @@ fm = textbox.getFontManager()
 print("available_font_names:",fm.getFontFamilyNames())
 
 # Create Window
-window=visual.Window((1280,800),
+window=visual.Window((800,600),
                         units='norm',
-                        fullscr=True, allowGUI=False,
+                        fullscr=False, allowGUI=True,
                         screen=0
                         )
 
