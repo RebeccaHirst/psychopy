@@ -15,9 +15,9 @@ fm = textbox.getFontManager()
 print("available_font_names:",fm.getFontFamilyNames())
 
 # Create Window
-window=visual.Window((800,600),
+window=visual.Window((1280,800),
                         units='norm',
-                        fullscr=False, allowGUI=True,
+                        fullscr=True, allowGUI=False,
                         screen=0
                         )
 

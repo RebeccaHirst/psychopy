@@ -33,16 +33,17 @@ else:
 TRIAL_COUNT = 2
 # Maximum trial time / time timeout
 T_MAX = 60.0
-win = visual.Window((1920, 1080),
+win = visual.Window(#(1920, 1080),
+                    (1280, 800),
                     units='pix',
                     fullscr=True,
                     allowGUI=False,
                     colorSpace='rgb255',
-                    monitor='55w_60dist',
+                    #monitor='55w_60dist',
                     color=[128, 128, 128]
                     )
-
-win.setMouseVisible(False)
+print(win.monitor)
+#win.setMouseVisible(False)
 text_stim = visual.TextStim(win, text="Start of Experiment",
                             pos=[0, 0], height=24,
                             color='black', units='pix', colorSpace='named',
