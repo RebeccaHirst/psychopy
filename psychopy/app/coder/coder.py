@@ -2314,6 +2314,9 @@ class CoderFrame(BaseAuiFrame, handlers.ThemeMixin):
         for key in ("runner", "pyrun", "pypilot"):
             if key in self.ribbon.buttons:
                 self.ribbon.buttons[key].Enable(isExp)
+        # update save/saveas buttons
+        self.ribbon.buttons['save'].Enable(readonly and self.currentDoc.UNSAVED)
+        self.ribbon.buttons['saveas'].Enable(bool(self.filename))
         # update menu items
         self.pavloviaMenu.syncBtn.Enable(bool(self.filename))
         self.pavloviaMenu.newBtn.Enable(bool(self.filename))
@@ -2538,8 +2541,11 @@ class CoderFrame(BaseAuiFrame, handlers.ThemeMixin):
             self.setTitle(title=self.winTitle, document=self.currentDoc)
             # clear the source tree
             self.structureWindow.srcTree.DeleteAllItems()
+            # disable save buttons
+            self.ribbon.buttons['save'].Disable()
+            self.ribbon.buttons['saveas'].Disable()
         else:
-            self.currentDoc = self.notebook.GetPage(newPageID)
+            self.setCurrentDoc(self.getOpenFilenames()[newPageID])
             self.structureWindow.refresh()
             # set to current file status
             self.setFileModified(self.currentDoc.UNSAVED)
@@ -2944,8 +2950,8 @@ class CoderRibbon(ribbon.FrameRibbon):
         # switch run/pilot
         runPilotSwitch = self.addSwitchCtrl(
             section="py", name="pyswitch",
-            labels=(_translate(""), _translate("")),
-            style=wx.HORIZONTAL
+            labels=(_translate("Pilot"), _translate("Run")),
+            style=wx.HORIZONTAL | wx.BU_NOTEXT
         )
         # run Py
         self.addButton(
