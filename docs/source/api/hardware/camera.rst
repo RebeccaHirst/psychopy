@@ -54,7 +54,6 @@ Overview
     CameraInfo.description
 
 
-
 Details
 =======
 
@@ -63,13 +62,5 @@ Details
     :inherited-members:
 
 .. autoclass:: CameraInfo
-    :members:
-    :inherited-members:
-
-.. autoclass:: StreamStatus
-    :members:
-    :inherited-members:
-
-.. autoclass:: StreamData
     :members:
     :inherited-members:

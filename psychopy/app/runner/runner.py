@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 # Part of the PsychoPy library
-# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2022 Open Science Tools Ltd.
+# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2025 Open Science Tools Ltd.
 # Distributed under the terms of the GNU General Public License (GPL).
 import glob
 import json
@@ -24,7 +24,7 @@ import webbrowser
 from pathlib import Path
 from subprocess import Popen, PIPE
 
-from psychopy import experiment
+from psychopy import experiment, logging, alerts
 from psychopy.app.utils import FrameSwitcher, FileDropTarget
 from psychopy.localization import _translate
 from psychopy.projects.pavlovia import getProject
@@ -32,7 +32,9 @@ from psychopy.scripts.psyexpCompile import generateScript
 from psychopy.app.runner.scriptProcess import ScriptProcess
 import psychopy.tools.versionchooser as versions
 
-folderColumn = 1
+
+folderColumn = 2
+runModeColumn = 1
 filenameColumn = 0
 
 
@@ -60,6 +62,7 @@ class RunnerFrame(wx.Frame, handlers.ThemeMixin):
         # detect retina displays (then don't use double-buffering)
         self.isRetina = self.GetContentScaleFactor() != 1
         self.SetDoubleBuffered(not self.isRetina)
+        self.SetMinSize(wx.Size(640, 480))
         # double buffered better rendering except if retina
         self.panel.SetDoubleBuffered(not self.isRetina)
 
@@ -89,6 +92,10 @@ class RunnerFrame(wx.Frame, handlers.ThemeMixin):
 
         # hide alerts to begin with, more room for std while also making alerts more noticeable
         self.Layout()
+        if self.isRetina:
+            self.SetSize(wx.Size(920, 640))
+        else:
+            self.SetSize(wx.Size(1080, 920))
 
         self.theme = app.theme
 
@@ -103,8 +110,8 @@ class RunnerFrame(wx.Frame, handlers.ThemeMixin):
         if self.panel.currentSelection >= 0:  # has valid item selected
             return self.panel.expCtrl.GetItem(self.panel.currentSelection).Text
 
-    def addTask(self, evt=None, fileName=None):
-        self.panel.addTask(fileName=fileName)
+    def addTask(self, evt=None, fileName=None, runMode="run"):
+        self.panel.addTask(fileName=fileName, runMode=runMode)
 
     def removeTask(self, evt=None):
         self.panel.removeTask(evt)
@@ -173,9 +180,9 @@ class RunnerFrame(wx.Frame, handlers.ThemeMixin):
 
         runMenuItems = [
             {'id': wx.ID_ANY,
-             'label': _translate("&Run\t%s") % keys['runScript'],
+             'label': _translate("&Run/pilot\t%s") % keys['runScript'],
              'status': _translate('Running experiment'),
-             'func': self.panel.runLocal},
+             'func': self.panel.onRunShortcut},
             {'id': wx.ID_ANY,
              'label': _translate('Run &JS for local debug'),
              'status': _translate('Launching local debug of online study'),
@@ -252,8 +259,11 @@ class RunnerFrame(wx.Frame, handlers.ThemeMixin):
             experiments = []
             for i in range(self.panel.expCtrl.GetItemCount()):
                 experiments.append(
-                    {'path': self.panel.expCtrl.GetItem(i, folderColumn).Text,
-                     'file': self.panel.expCtrl.GetItem(i, filenameColumn).Text}
+                    {
+                        'path': self.panel.expCtrl.GetItem(i, folderColumn).Text,
+                        'file': self.panel.expCtrl.GetItem(i, filenameColumn).Text,
+                        'runMode': self.panel.expCtrl.GetItem(i, runModeColumn).Text,
+                    },
                 )
             with open(newPath, 'w') as file:
                 json.dump(experiments, file)
@@ -289,10 +299,13 @@ class RunnerFrame(wx.Frame, handlers.ThemeMixin):
                     fileOk = False
 
                 if fileOk:
+                    self.panel.entries = {}
                     self.panel.expCtrl.DeleteAllItems()
                     for exp in experiments:
                         self.panel.addTask(
-                            fileName=os.path.join(exp['path'], exp['file']))
+                            fileName=os.path.join(exp['path'], exp['file']),
+                            runMode=exp.get('runMode', "run")
+                        )
                     self.listname = newPath
 
         dlg.Destroy()  # close the file browser
@@ -455,12 +468,15 @@ class RunnerPanel(wx.Panel, ScriptProcess, handlers.ThemeMixin):
 
         # double buffered better rendering except if retina
         self.SetDoubleBuffered(parent.IsDoubleBuffered())
+        self.SetMinSize(wx.Size(640, 480))
 
         self.app = app
         self.prefs = self.app.prefs.coder
         self.paths = self.app.prefs.paths
         self.parent = parent
+        # start values for server stuff
         self.serverProcess = None
+        self.serverPort = None
 
         # self.entries is dict of dicts: {filepath: {'index': listCtrlInd}} and may store more info later
         self.entries = {}
@@ -498,6 +514,7 @@ class RunnerPanel(wx.Panel, ScriptProcess, handlers.ThemeMixin):
         self.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.onDoubleClick, self.expCtrl)
         self.expCtrl.InsertColumn(filenameColumn, _translate('File'))
         self.expCtrl.InsertColumn(folderColumn, _translate('Path'))
+        self.expCtrl.InsertColumn(folderColumn, _translate('Run mode'))
         self.topPanel.sizer.Add(self.expCtrl, proportion=1, border=6, flag=wx.ALL | wx.EXPAND)
 
         # Setup panel for bottom half (alerts and stdout)
@@ -521,18 +538,21 @@ class RunnerPanel(wx.Panel, ScriptProcess, handlers.ThemeMixin):
         self.splitter.SplitVertically(
             window1=self.topPanel,
             window2=self.bottomPanel,
-            sashPosition=480
+            sashPosition=360
         )
         self.splitter.SetMinimumPaneSize(360)
 
         self.SetSizerAndFit(self.mainSizer)
-        self.SetMinSize(self.Size)
 
         # Set starting states on buttons
         self.ribbon.buttons['pystop'].Disable()
         self.ribbon.buttons['remove'].Disable()
 
         self.theme = parent.theme
+
+    def __del__(self):
+        if self.serverProcess is not None:
+            self.killServer()
 
     def _applyAppTheme(self):
         # Srt own background
@@ -592,6 +612,19 @@ class RunnerPanel(wx.Panel, ScriptProcess, handlers.ThemeMixin):
             self.ribbon.buttons['pyrun'].Enable()
             self.ribbon.buttons['pypilot'].Enable()
 
+    def onRunShortcut(self, evt=None):
+        """
+        Callback for when the run shortcut is pressed - will either run or pilot depending on run mode
+        """
+        # do nothing if we have no experiment
+        if self.currentExperiment is None:
+            return
+        # run/pilot according to mode
+        if self.currentExperiment.runMode:
+            self.runLocal(evt)
+        else:
+            self.pilotLocal(evt)
+
     def runLocal(self, evt=None, focusOnExit='runner', args=None):
         """Run experiment from new process using inherited ScriptProcess class methods."""
         if self.currentSelection is None:
@@ -600,14 +633,15 @@ class RunnerPanel(wx.Panel, ScriptProcess, handlers.ThemeMixin):
         # substitute args
         if args is None:
             args = []
-
-        # set switch mode
-        self.ribbon.buttons['pyswitch'].setMode("--pilot" in args)
+        # start off looking at stdout (will switch to Alerts if there are any)
+        self.outputNotebook.SetSelectionToWindow(self.stdoutPnl)
 
         currentFile = str(self.currentFile)
         if self.currentFile.suffix == '.psyexp':
-            generateScript(experimentPath=currentFile.replace('.psyexp', '_lastrun.py'),
-                           exp=self.loadExperiment())
+            generateScript(
+                exp=self.loadExperiment(),
+                outfile=currentFile.replace('.psyexp', '_lastrun.py')
+            )
         procStarted = self.runFile(
             fileName=currentFile,
             focusOnExit=focusOnExit,
@@ -646,38 +680,60 @@ class RunnerPanel(wx.Panel, ScriptProcess, handlers.ThemeMixin):
         if self.currentSelection is None:
             return
 
-        # we only want one server process open
-        if self.serverProcess is not None:
-            self.serverProcess.kill()
-            self.serverProcess = None
-
-        # Get PsychoJS libs
-        self.getPsychoJS()
-
+        # get relevant paths
         htmlPath = str(self.currentFile.parent / self.outputPath)
         jsFile = self.currentFile.parent / (self.currentFile.stem + ".js")
-        pythonExec = Path(sys.executable)
-        command = [str(pythonExec), "-m", "http.server", str(port)]
+        # regenerate JS file
+        if self.currentFile.suffix == ".psyexp":
+            generateScript(
+                outfile=str(jsFile),
+                exp=self.loadExperiment(),
+                target="PsychoJS"
+            )
+        # start server
+        self.startServer(htmlPath, port=port)
+        # open experiment
+        webbrowser.open("http://localhost:{}?__pilotToken=local".format(port))
+        # log experiment open
+        print(
+            f"##### Running PsychoJS task from {htmlPath} on port {port} #####\n"
+        )
 
-        if not os.path.exists(jsFile):
-            generateScript(experimentPath=str(jsFile),
-                           exp=self.loadExperiment(),
-                           target="PsychoJS")
+    def startServer(self, htmlPath, port=12002):
+        # we only want one server process open
+        if self.serverProcess is not None:
+            self.killServer()
+        # get PsychoJS libs
+        self.getPsychoJS()
+        # construct command
+        command = [sys.executable, "-m", "http.server", str(port)]
+        # open server
+        self.serverPort = port
+        self.serverProcess = Popen(
+            command,
+            bufsize=1,
+            cwd=htmlPath,
+            stdout=PIPE,
+            stderr=PIPE,
+            shell=False,
+            universal_newlines=True,
+        )
+        time.sleep(.1)
+        # log server start
+        logging.info(f"Local server started on port {port} in directory {htmlPath}")
 
-        self.serverProcess = Popen(command,
-                                   bufsize=1,
-                                   cwd=htmlPath,
-                                   stdout=PIPE,
-                                   stderr=PIPE,
-                                   shell=False,
-                                   universal_newlines=True,
-
-                                   )
-
-        time.sleep(.1)  # Wait for subprocess to start server
-        webbrowser.open("http://localhost:{}".format(port))
-        print("##### Local server started! #####\n\n"
-              "##### Running PsychoJS task from {} #####\n".format(htmlPath))
+    def killServer(self):
+        # we can only close if there is a process
+        if self.serverProcess is None:
+            return
+        # kill subprocess
+        self.serverProcess.terminate()
+        time.sleep(.1)
+        # log server stopped
+        logging.info(f"Local server on port {self.serverPort} stopped")
+        # reset references to server stuff
+        self.serverProcess = None
+        self.serverPort = None
 
     def onURL(self, evt):
         self.parent.onURL(evt)
@@ -709,7 +765,7 @@ class RunnerPanel(wx.Panel, ScriptProcess, handlers.ThemeMixin):
 
         print("##### PsychoJS libs downloaded to {} #####\n".format(libPath))
 
-    def addTask(self, evt=None, fileName=None):
+    def addTask(self, evt=None, fileName=None, runMode="run"):
         """
         Add task to the expList listctrl.
 
@@ -747,17 +803,29 @@ class RunnerPanel(wx.Panel, ScriptProcess, handlers.ThemeMixin):
                 self.expCtrl.SetItem(thisIndex, folderColumn, str(thisFile.parent))  # add the folder name
                 # add the new item to our list of files
                 self.entries[thisFile.absolute()] = {'index': thisIndex}
+            # load psyexp
+            if thisFile.suffix == ".psyexp":
+                # get run mode from file
+                if experiment.Experiment.getRunModeFromFile(thisFile):
+                    runMode = "run"
+                else:
+                    runMode = "pilot"
+            # set run mode for item
+            self.expCtrl.SetItem(thisIndex, runModeColumn, runMode)
 
         if filePaths:  # set selection to the final item to be added
             # Set item selection
             # de-select previous
             self.expCtrl.SetItemState(self.currentSelection or 0, 0, wx.LIST_STATE_SELECTED)
             # select new
-            self.expCtrl.Select(thisIndex)  # calls onSelectItem which updates other info
+            self.setSelection(thisIndex)  # calls onSelectItem which updates other info
 
         # Set column width
         self.expCtrl.SetColumnWidth(filenameColumn, wx.LIST_AUTOSIZE)
         self.expCtrl.SetColumnWidth(folderColumn, wx.LIST_AUTOSIZE)
+        self.expCtrl.SetColumnWidth(runModeColumn, wx.LIST_AUTOSIZE)
+
+        self.expCtrl.Refresh()
 
     def removeTask(self, evt):
         """Remove experiment entry from the expList listctrl."""
@@ -774,29 +842,85 @@ class RunnerPanel(wx.Panel, ScriptProcess, handlers.ThemeMixin):
         del self.entries[self.currentFile]  # remove from our tracking dictionary
         self.expCtrl.DeleteItem(self.currentSelection) # from wx control
         self.app.updateWindowMenu()
+    
+    def updateRunModeIcons(self, evt=None):
+        """
+        Function to update run/pilot icons according to run mode
+        """
+        mode = self.ribbon.buttons['pyswitch'].mode
+        # show/hide run buttons
+        for key in ("pyrun", "jsrun"):
+            self.ribbon.buttons[key].Show(mode)
+        # hide/show pilot buttons
+        for key in ("pypilot", "jspilot"):
+            self.ribbon.buttons[key].Show(not mode)
+        # update
+        self.ribbon.Layout()
+
+    def onRunModeToggle(self, evt):
+        """
+        Function to execute when switching between pilot and run modes
+        """
+        mode = evt.GetInt()
+        # update buttons
+        self.updateRunModeIcons()
+        # update experiment mode
+        if self.currentExperiment is not None:
+            # find any Builder windows with this experiment open
+            for frame in self.app.getAllFrames(frameType='builder'):
+                if frame.exp == self.currentExperiment:
+                    frame.ribbon.buttons['pyswitch'].setMode(mode, silent=True)
+                    if hasattr(frame, "updateRunModeIcons"):
+                        frame.updateRunModeIcons()
+            # update current selection
+            runMode = "pilot"
+            if mode:
+                runMode = "run"
+            self.expCtrl.SetItem(self.currentSelection, runModeColumn, runMode)
+        # update
+        self.ribbon.Update()
+        self.ribbon.Refresh()
+        self.ribbon.Layout()
+
+    def setSelection(self, index):
+        self.expCtrl.Select(index)
+        self.onItemSelected(index)
 
     def onItemSelected(self, evt):
         """Set currentSelection to index of currently selected list item."""
-        self.currentSelection = evt.Index
+        if not isinstance(evt, int):
+            evt = evt.Index
+        self.currentSelection = evt
         filename = self.expCtrl.GetItemText(self.currentSelection, filenameColumn)
         folder = self.expCtrl.GetItemText(self.currentSelection, folderColumn)
+        runMode = self.expCtrl.GetItemText(self.currentSelection, runModeColumn)
         self.currentFile = Path(folder, filename)
         self.currentExperiment = self.loadExperiment()
         self.currentProject = None  # until it's needed (slow to update)
         # thisItem = self.entries[self.currentFile]
 
         self.ribbon.buttons['remove'].Enable()
-        # enable rub/pilot ctrls
+        # enable run/pilot ctrls
         self.ribbon.buttons['pyswitch'].Enable()
-        runMode = self.ribbon.buttons['pyswitch'].mode
-        self.ribbon.buttons['pyswitch'].setMode(runMode)
+        self.ribbon.buttons['pyrun'].Enable()
+        self.ribbon.buttons['pypilot'].Enable()
         # enable JS run
         if self.currentFile.suffix == '.psyexp':
             self.ribbon.buttons['jsrun'].Enable()
+            self.ribbon.buttons['jspilot'].Enable()
         else:
             self.ribbon.buttons['jsrun'].Disable()
+            self.ribbon.buttons['jspilot'].Disable()
+        # disable stop
+        self.ribbon.buttons['pystop'].Disable()
+        # switch mode
+        self.ribbon.buttons['pyswitch'].setMode(runMode == "run")
+        # update
         self.updateAlerts()
         self.app.updateWindowMenu()
+        self.ribbon.Update()
+        self.ribbon.Refresh()
+        self.ribbon.Layout()
 
     def onItemDeselected(self, evt):
         """Set currentSelection, currentFile, currentExperiment and currentProject to None."""
@@ -809,6 +933,7 @@ class RunnerPanel(wx.Panel, ScriptProcess, handlers.ThemeMixin):
         self.ribbon.buttons['pyrun'].Disable()
         self.ribbon.buttons['pypilot'].Disable()
         self.ribbon.buttons['jsrun'].Disable()
+        self.ribbon.buttons['jspilot'].Disable()
         self.ribbon.buttons['remove'].Disable()
         self.app.updateWindowMenu()
 
@@ -830,8 +955,8 @@ class RunnerPanel(wx.Panel, ScriptProcess, handlers.ThemeMixin):
 
     def onDoubleClick(self, evt):
         self.currentSelection = evt.Index
-        filename = self.expCtrl.GetItem(self.currentSelection, 0).Text
-        folder = self.expCtrl.GetItem(self.currentSelection, 1).Text
+        filename = self.expCtrl.GetItem(self.currentSelection, filenameColumn).Text
+        folder = self.expCtrl.GetItem(self.currentSelection, folderColumn).Text
         filepath = os.path.join(folder, filename)
         if filename.endswith('psyexp'):
             # do we have that file already in a frame?
@@ -925,7 +1050,12 @@ class RunnerPanel(wx.Panel, ScriptProcess, handlers.ThemeMixin):
 
 class RunnerOutputNotebook(aui.AuiNotebook, handlers.ThemeMixin):
     def __init__(self, parent):
-        aui.AuiNotebook.__init__(self, parent, style=wx.BORDER_NONE)
+        aui.AuiNotebook.__init__(
+            self, 
+            parent, 
+            style=wx.BORDER_NONE, 
+            agwStyle=aui.AUI_NB_CLOSE_ON_ALL_TABS
+        )
 
         # store pages by non-translated names for easy access (see RunnerFrame.getOutputPanel)
         self.panels = {}
@@ -940,6 +1070,7 @@ class RunnerOutputNotebook(aui.AuiNotebook, handlers.ThemeMixin):
             self.alertsPnl, caption=_translate("Alerts")
         )
         self.panels['alerts'] = self.alertsPnl
+        alerts.addAlertHandler(self.alertsPnl.ctrl)
 
         # StdOut
         self.stdoutPnl = ScriptOutputPanel(
@@ -963,7 +1094,44 @@ class RunnerOutputNotebook(aui.AuiNotebook, handlers.ThemeMixin):
         )
         self.panels['git'] = self.gitPnl
 
-        self.SetMinSize((720, 720))
+        # bind function when page receives focus
+        self._readCache = {}
+        self.Bind(aui.EVT_AUINOTEBOOK_PAGE_CHANGED, self.onFocus)
+        # min size is 80 chars / 40 lines
+        self.SetMinSize(wx.Size(
+            self.stdoutPnl.GetCharWidth() * 80, 
+            self.stdoutPnl.GetCharHeight() * 40, 
+        ))
+        # hide close buttons on tabs
+        for i in range(self.GetPageCount()):
+            self.SetCloseButton(i, False)
+
+    def setRead(self, i, state):
+        """
+        Mark a tab (by index) as read/unread (determines whether the page gets a little blue dot)
+
+        Parameters
+        ----------
+        i : int
+            Index of the page to set
+        state : bool
+            True for read (i.e. no dot), False for unread (i.e. dot)
+        """
+        # if state matches cached state, don't bother updating again
+        if self._readCache.get(i, None) == state:
+            return
+        # cache read value
+        self._readCache[i] = state
+        # get tab label without asterisk
+        label = self.GetPageText(i).replace(" *", "")
+        # add/remove asterisk
+        if state:
+            self.SetPageText(i, label)
+        else:
+            self.SetPageText(i, label + " *")
+        # update
+        self.Update()
+        self.Refresh()
 
     def onWrite(self, evt):
         # get ctrl
@@ -972,10 +1140,19 @@ class RunnerOutputNotebook(aui.AuiNotebook, handlers.ThemeMixin):
         for i in range(self.GetPageCount()):
             # get page window
             page = self.GetPage(i)
-            # is the ctrl a child of that window?
-            if page.IsDescendant(ctrl):
-                # if so, focus that page
-                self.SetSelection(i)
+            # is the ctrl a child of that window, and is it deselected?
+            if page.IsDescendant(ctrl) and self.GetSelection() != i:
+                # mark unread
+                self.setRead(i, False)
+                # alerts and pavlovia get focus too when written to
+                if page in (self.panels['git'], self.panels['alerts']):
+                    self.SetSelection(i)
+
+    def onFocus(self, evt):
+        # get index of new selection
+        i = evt.GetSelection()
+        # set read status
+        self.setRead(i, True)
 
 
 class RunnerRibbon(ribbon.FrameRibbon):
@@ -1014,6 +1191,20 @@ class RunnerRibbon(ribbon.FrameRibbon):
 
         self.addSeparator()
 
+        # --- Tools ---
+        self.addSection(
+            "experiment", label=_translate("Experiment"), icon="experiment"
+        )
+        # switch run/pilot
+        runPilotSwitch = self.addSwitchCtrl(
+            section="experiment", name="pyswitch",
+            labels=(_translate("Pilot"), _translate("Run")),
+            callback=parent.onRunModeToggle,
+            style=wx.HORIZONTAL
+        )
+
+        self.addSeparator()
+
         # --- Python ---
         self.addSection(
             "py", label=_translate("Desktop"), icon="desktop"
@@ -1022,44 +1213,40 @@ class RunnerRibbon(ribbon.FrameRibbon):
         self.addButton(
             section="py", name="pypilot", label=_translate("Pilot"), icon='pyPilot',
             tooltip=_translate("Run the current script in Python with piloting features on"),
-            callback=parent.pilotLocal, style=wx.BU_BOTTOM | wx.BU_EXACTFIT
-        )
-        # switch run/pilot
-        runPilotSwitch = self.addSwitchCtrl(
-            section="py", name="pyswitch",
-            labels=(_translate("Pilot"), _translate("Run")),
-            style=wx.HORIZONTAL | wx.BU_NOTEXT
-        )
+            callback=parent.pilotLocal
+        ).Disable()
         # run Py
         self.addButton(
             section="py", name="pyrun", label=_translate("Run"), icon='pyRun',
             tooltip=_translate("Run the current script in Python"),
-            callback=parent.runLocal, style=wx.BU_BOTTOM | wx.BU_EXACTFIT
-        )
-        # link buttons to switch
-        runPilotSwitch.addDependant(self.buttons['pyrun'], mode=1, action="enable")
-        runPilotSwitch.addDependant(self.buttons['pypilot'], mode=0, action="enable")
-        runPilotSwitch.setMode(0)
+            callback=parent.runLocal
+        ).Disable()
         # stop
         self.addButton(
             section="py", name="pystop", label=_translate("Stop"), icon='stop',
             tooltip=_translate("Stop the current (Python) script"),
             callback=parent.stopTask
-        )
+        ).Disable()
 
         self.addSeparator()
 
         # --- JS ---
         self.addSection(
-            "js", label=_translate("Browser"), icon="browser"
+            "browser", label=_translate("Browser"), icon="browser"
         )
-        # run JS
-        btn = self.addButton(
-            section="js", name="jsrun", label=_translate("Run in local browser"), icon='jsRun',
-            tooltip=_translate("Run the current script locally on your browser"),
+        # pilot JS
+        self.addButton(
+            section="browser", name="jspilot", label=_translate("Pilot in browser"),
+            icon='jsPilot',
+            tooltip=_translate("Pilot experiment locally in your browser"),
             callback=parent.runOnlineDebug
-        )
-        btn.Disable()
+        ).Disable()
+        # run JS
+        self.addButton(
+            section="browser", name="jsrun", label=_translate("Run on Pavlovia"), icon='jsRun',
+            tooltip=_translate("Run experiment on Pavlovia"),
+            callback=parent.runOnline
+        ).Disable()
 
         self.addSeparator()
 
@@ -1071,6 +1258,11 @@ class RunnerRibbon(ribbon.FrameRibbon):
         self.addPavloviaUserCtrl(
             section="pavlovia", name="pavuser", frame=parent
         )
+
+        self.addSeparator()
+
+        # --- Plugin sections ---
+        self.addPluginSections("psychopy.app.builder")
 
         # --- Views ---
         self.addStretchSpacer()

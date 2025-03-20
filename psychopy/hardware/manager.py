@@ -5,7 +5,7 @@
 """
 
 # Part of the PsychoPy library
-# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2022 Open Science Tools Ltd.
+# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2025 Open Science Tools Ltd.
 # Distributed under the terms of the GNU General Public License (GPL).
 
 __all__ = [
@@ -16,10 +16,12 @@ __all__ = [
 ]
 
 
+from psychopy.hardware.exceptions import DeviceNotConnectedError, ManagedDeviceError
 from psychopy.tools import systemtools as st
 from serial.tools import list_ports
 from psychopy import logging
 import atexit
+import traceback
 import importlib
 import json
 from pathlib import Path
@@ -166,6 +168,26 @@ class DeviceManager:
 
         return cls
 
+    @staticmethod
+    def activatePlugins(which="all"):
+        """
+        Activate plugins, allowing them to be imported from PsychoPy and making device backends
+        from plugins visible to DeviceManager.
+
+        Parameters
+        ----------
+        which : str
+            Which set of plugins to import, the same values as would be passed to
+            `psychopy.plugins.listPlugins`
+
+        Returns
+        -------
+        bool
+            True if completed successfully
+        """
+        from psychopy.plugins import activatePlugins
+        activatePlugins(which=which)
+
     # --- device management ---
     @staticmethod
     def addDevice(deviceClass, deviceName, *args, **kwargs):
@@ -193,8 +215,19 @@ class DeviceManager:
         deviceClass = DeviceManager._resolveAlias(deviceClass)
         # get device class
         cls = DeviceManager._resolveClassString(deviceClass)
-        # initialise device
-        device = cls(*args, **kwargs)
+        try:
+            # initialise device
+            device = cls(*args, **kwargs)
+        except DeviceNotConnectedError as err:
+            # raise "not connected" errors as normal
+            raise err
+        except Exception as err:
+            # if initialization fails, generate a more informative ManagedDeviceError and return it
+            raise ManagedDeviceError(
+                msg=err.args[0],
+                deviceName=deviceName,
+                traceback=err.__traceback__,
+            )
         # store device by name
         DeviceManager.devices[deviceName] = device
 
@@ -252,6 +285,47 @@ class DeviceManager:
         # store same device by new handle
         DeviceManager.devices[alias] = DeviceManager.getDevice(deviceName)
         DeviceManager.deviceAliases[alias] = deviceName
+
+        return True
+    
+    @staticmethod
+    def registerPID(pid):
+        """
+        Register a given window with PsychoPy, marking it as safe to e.g. perform keylogging in.
+
+        Parameters
+        ----------
+        pid : str
+            Process ID (PID) of the window to register
+
+        Returns
+        -------
+        bool
+            True if completed successfully
+        """
+        # register PID
+        st.registerPID(pid)
+        
+        return True
+
+    @staticmethod
+    def removeDeviceAlias(alias):
+        """
+        Removes a device alias from DeviceManager, but doesn't delete the object to which the alias
+        corresponds.
+
+        Parameters
+        ----------
+        deviceName : str
+            Key by which the device to alias is currently stored.
+
+        Returns
+        -------
+        bool
+            True if completed successfully
+        """
+        DeviceManager.devices.pop(alias)
+        DeviceManager.deviceAliases.pop(alias)
 
         return True
 
@@ -332,16 +406,32 @@ class DeviceManager:
         bool
             True if completed successfully
         """
+        # log an error and return False if device isn't added
+        if deviceName not in DeviceManager.devices:
+            logging.error(
+                f"Tried to remove device '{deviceName}' but there is no device by that name."
+            )
+            return False
+        # get device object
         device = DeviceManager.devices[deviceName]
+        # clear any listeners on it
         DeviceManager.clearListeners(deviceName)
+        # close it
         if hasattr(device, "close"):
             device.close()
-        del DeviceManager.devices[deviceName]
-
-        # Claenup deviceAliases as well
+        # remove any child devices
+        _toRemove = []
+        for name, poss in DeviceManager.devices.items():
+            if hasattr(poss, "parent") and poss.parent is device:
+                _toRemove.append(name)
+        for name in _toRemove:
+            DeviceManager.removeDevice(name)
+        # remove device aliases
         for alias in list(DeviceManager.deviceAliases.keys()):
             if deviceName == DeviceManager.deviceAliases[alias]:
                 del DeviceManager.deviceAliases[alias]
+        # delete object
+        del DeviceManager.devices[deviceName]
 
         return True
 
@@ -790,7 +880,7 @@ class DeviceManager:
                 win, text=str(n + 1),
                 size=1, pos=0,
                 alignment="center", anchor="center",
-                letterHeight=0.5, bold=True,
+                letterHeight=0.25, bold=True,
                 fillColor=None, color="white"
             )
             lbls.append(lbl)

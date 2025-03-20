@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 # Part of the PsychoPy library
-# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2022 Open Science Tools Ltd.
+# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2025 Open Science Tools Ltd.
 # Distributed under the terms of the GNU General Public License (GPL).
 
 """Experiment classes:
@@ -22,7 +22,7 @@ import xml.etree.ElementTree as xml
 from xml.dom import minidom
 from copy import deepcopy, copy
 from pathlib import Path
-from pkg_resources import parse_version
+from packaging.version import Version
 
 import psychopy
 from psychopy import data, __version__, logging
@@ -120,7 +120,6 @@ class Experiment:
 
     def __init__(self, prefs=None):
         super(Experiment, self).__init__()
-        self.name = ''
         self.filename = ''  # update during load/save xml
         self.flow = Flow(exp=self)  # every exp has exactly one flow
         self.routines = collections.OrderedDict()
@@ -147,6 +146,9 @@ class Experiment:
         self.requireImport(importName='keyboard',
                            importFrom='psychopy.hardware')
 
+        # what online resources are needed? (PsychoJS only)
+        self.requiredResources = []
+
         _settingsComp = getComponents(fetchIcons=False)['SettingsComponent']
         self.settings = _settingsComp(parentName='', exp=self)
         # this will be the xml.dom.minidom.doc object for saving
@@ -163,6 +165,38 @@ class Experiment:
         self._expHandler = TrialHandler(exp=self, name='thisExp')
         self._expHandler.type = 'ExperimentHandler'  # true at run-time
 
+    def __eq__(self, other):
+        if isinstance(other, Experiment):
+            # if another experiment, compare filenames
+            return other.filename == self.filename
+        elif isinstance(other, (str, Path)):
+            # if a string or path, compare against filename
+            return other == self.filename
+        else:
+            # if neither, it's not the same
+            return False
+    
+    def requireOnlineResource(self, url, name=None):
+        """
+        Add a link to an online resource to be loaded at experiment start in PsychoJS.
+
+        Parameters
+        ----------
+        url : str
+            Link to the necessary resource
+        name : str
+            Name with which to refer to the resource later in the experiment. Leave as None to use 
+            the url as its name.
+        """
+        # use url for name if none given
+        if name is None:
+            name = url
+        # add resource
+        self.requiredResources.append({
+            'name': name,
+            'rel': url,
+        })
+
     def requirePsychopyLibs(self, libs=()):
         """Add a list of top-level psychopy libs that the experiment
         will need. e.g. [visual, event]
@@ -176,6 +210,14 @@ class Experiment:
                                importFrom='psychopy')
 
     @property
+    def name(self):
+        return self.settings.params['expName'].val
+
+    @name.setter
+    def name(self, value):
+        self.settings.params['expName'].val = value
+
+    @property
     def eyetracking(self):
         """What kind of eyetracker this experiment is set up for"""
         return self.settings.params['eyetracker']
@@ -186,6 +228,14 @@ class Experiment:
         Variant of this experiment's filename with "_legacy" on the end
         """
         return ft.constructLegacyFilename(self.filename)
+
+    @property
+    def runMode(self):
+        return int(self.settings.params['runMode'].val)
+
+    @runMode.setter
+    def runMode(self, value):
+        self.settings.params['runMode'].val = value
 
     def requireImport(self, importName, importFrom='', importAs=''):
         """Add a top-level import to the experiment.
@@ -443,13 +493,13 @@ class Experiment:
         # copy self
         exp = deepcopy(self)
         # parse version
-        targetVersion = parse_version(targetVersion)
+        targetVersion = Version(targetVersion)
         # change experiment version
         exp.psychopyVersion = targetVersion
         # iterate through Routines
         for rtName, rt in copy(exp.routines).items():
             # if Routine was added after the target version, remove it
-            if hasattr(type(rt), "version") and parse_version(rt.version) > targetVersion:
+            if hasattr(type(rt), "version") and Version(rt.version) > targetVersion:
                 exp.routines.pop(rtName)
             # if Routine is a standalone, we're done
             if isinstance(rt, BaseStandaloneRoutine):
@@ -457,7 +507,7 @@ class Experiment:
             # iterate through Components
             for comp in copy(rt):
                 # if Component was added after target version, remove it
-                if hasattr(type(comp), "version") and parse_version(comp.version) > targetVersion:
+                if hasattr(type(comp), "version") and Version(comp.version) > targetVersion:
                     i = rt.index(comp)
                     rt.pop(i)
 
@@ -694,9 +744,13 @@ class Experiment:
                         # don't warn people if we know it's OK (e.g. for params
                         # that have been removed
                         pass
-                    elif componentNode is not None and componentNode.get("plugin") not in ("None", None):
-                        # don't warn people if param is from a plugin
-                        pass
+                    elif componentNode is not None and componentNode.get("plugin", False) not in (False, "", "None", None):
+                        # is param unrecognised because it's from a plugin?
+                        params[name].categ = "Plugin"
+                        params[name].plugin = componentNode.get("plugin", False)
+                    elif paramNode.get('plugin', False):
+                        # load plugin name if param is from a plugin
+                        params[name].plugin = paramNode.get('plugin')
                     else:
                         # if param not recognised, mark as such
                         recognised = False
@@ -719,6 +773,56 @@ class Experiment:
 
         return recognised
 
+    @staticmethod
+    def fromFile(filename):
+        """
+        Creates a new Experiment object and loads a Builder Experiment from file.
+
+        Parameters
+        ----------
+        filename : pathlike
+            `.psyexp` file to load.
+
+        Returns
+        -------
+        Experiment
+            Loaded Experiment object
+        """
+        # make new Experiment
+        exp = Experiment()
+        # load file
+        exp.loadFromXML(filename)
+
+        return exp
+
+    def _getValidRoutineName(self, routineNode, modifiedNames):
+        """
+        Find valid routine name
+        
+        Parameters
+        ----------
+        routineNode : Routine
+            Routine, Standalone Routine, or Unknown Routine node being read
+            from XML file
+        modifiedNames : List[str]
+            Names that have been modified within the XML file
+
+        Modifies:
+        -------
+        modifiedNames : List[str]
+            Appends name (str) if name was changed
+
+        Returns
+        -------
+        routineGoodName : str
+            Validated name of routine being added, meaning no duplicate names
+        """
+        routineGoodName = self.namespace.makeValid(routineNode.get('name'))
+        if routineGoodName != routineNode.get('name'):
+            modifiedNames.append(routineNode.get('name'))
+        self.namespace.add(routineGoodName)
+        return routineGoodName
+
     def loadFromXML(self, filename):
         """Loads an xml file and parses the builder Experiment from it
         """
@@ -738,10 +842,10 @@ class Experiment:
             return
         self.psychopyVersion = root.get('version')
         # If running an experiment from a future version, send alert to change "Use Version"
-        if parse_version(psychopy.__version__) < parse_version(self.psychopyVersion):
+        if Version(psychopy.__version__) < Version(self.psychopyVersion):
             alert(code=4051, strFields={'version': self.psychopyVersion})
         # If versions are either side of 2021, send alert
-        if parse_version(psychopy.__version__) >= parse_version("2021.1.0") > parse_version(self.psychopyVersion):
+        if Version(psychopy.__version__) >= Version("2021.1.0") > Version(self.psychopyVersion):
             alert(code=4052, strFields={'version': self.psychopyVersion})
 
         # Parse document nodes
@@ -767,9 +871,6 @@ class Experiment:
         if self.settings.params['expName'].val in ['', None, 'None']:
             shortName = os.path.splitext(filenameBase)[0]
             self.setExpName(shortName)
-        # load plugins so that plugged in components get any additional params
-        from psychopy.plugins import activatePlugins
-        activatePlugins()
         # fetch routines
         routinesNode = root.find('Routines')
         allCompons = getAllComponents(
@@ -778,11 +879,7 @@ class Experiment:
         # get each routine node from the list of routines
         for routineNode in routinesNode:
             if routineNode.tag == "Routine":
-                routineGoodName = self.namespace.makeValid(
-                    routineNode.get('name'))
-                if routineGoodName != routineNode.get('name'):
-                    modifiedNames.append(routineNode.get('name'))
-                self.namespace.user.append(routineGoodName)
+                routineGoodName = self._getValidRoutineName(routineNode, modifiedNames)
                 routine = Routine(name=routineGoodName, exp=self)
                 # self._getXMLparam(params=routine.params, paramNode=routineNode)
                 self.routines[routineNode.get('name')] = routine
@@ -850,12 +947,13 @@ class Experiment:
                     if component not in routine:
                         routine.append(component)
             else:
+                routineGoodName = self._getValidRoutineName(routineNode, modifiedNames)
                 if routineNode.tag in allRoutines:
                     # If not a routine, may be a standalone routine
-                    routine = allRoutines[routineNode.tag](exp=self, name=routineNode.get('name'))
+                    routine = allRoutines[routineNode.tag](exp=self, name=routineGoodName)
                 else:
                     # Otherwise treat as unknown
-                    routine = allRoutines['UnknownRoutine'](exp=self, name=routineNode.get('name'))
+                    routine = allRoutines['UnknownRoutine'](exp=self, name=routineGoodName)
                 # Apply all params
                 for paramNode in routineNode:
                     if paramNode.tag == "Param":
@@ -988,15 +1086,43 @@ class Experiment:
         if len(unknownParams):
             # construct message
             msg = _translate(
-                "Parameters which are not known to this version of PsychoPy, have come "
-                "from your experiment file:\n"
-                "%s\n"
-                "This experiment may not run correctly in the "
-                "current version."
+                "Parameters not known to this version of PsychoPy have come from your experiment "
+                "file: %s. This experiment may not run correctly in the current version."
             )
             # log message
-            logging.warn(msg % "\n".join(unknownParams))
+            logging.warn(msg % ", ".join(unknownParams))
             logging.flush()
+
+    @staticmethod
+    def getRunModeFromFile(file):
+        """
+        Get the run mode stored in an experiment file without fully loading the experiment.
+
+        Parameters
+        ----------
+        file : Path or str
+            Path of the file to read
+
+        Returns
+        -------
+        int
+            0 for piloting mode, 1 for running mode
+        """
+        file = str(file)
+        # make and populate xml root element
+        tree = xml.ElementTree()
+        tree.parse(file)
+        # get root
+        root = tree.getroot()
+        # find settings node
+        settings = root.find("Settings")
+        # find param for runMode
+        for child in settings:
+            if child.attrib['name'] == "runMode":
+                # get value
+                return int(child.attrib['val'])
+
+        return 1
 
     def setExpName(self, name):
         self.settings.params['expName'].val = name
@@ -1072,10 +1198,6 @@ class Experiment:
             else:
                 thisFile['rel'] = filePath
                 thisFile['abs'] = os.path.normpath(join(srcRoot, filePath))
-                if "/" in filePath:
-                    thisFile['name'] = filePath.split("/")[-1]
-                else:
-                    thisFile['name'] = filePath
                 if len(thisFile['abs']) <= 256 and os.path.isfile(thisFile['abs']):
                     return thisFile
 
@@ -1135,7 +1257,7 @@ class Experiment:
         # Get resources for components
         compResources = []
         handled = False
-        for thisEntry in self.flow:
+        for thisEntry in self.flow.getUniqueEntries():
             if thisEntry.getType() == 'Routine':
                 # find all params of all compons and check if valid filename
                 for thisComp in thisEntry:
@@ -1232,7 +1354,7 @@ class Experiment:
                 chosenResources.append(thisFile)
 
         # Check for any resources not in experiment path
-        resources = loopResources + compResources + chosenResources
+        resources = loopResources + compResources + chosenResources + self.requiredResources
         resources = [res for res in resources if res is not None]
         for res in resources:
             if res in list(ft.defaultStim):

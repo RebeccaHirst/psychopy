@@ -18,6 +18,7 @@ some more added:
 from ast import literal_eval
 
 import numpy as np
+import sys
 from arabic_reshaper import ArabicReshaper
 from pyglet import gl
 from bidi import algorithm as bidi
@@ -25,17 +26,22 @@ import re
 
 from ..aperture import Aperture
 from ..basevisual import (
-    BaseVisualStim, ColorMixin, ContainerMixin, WindowMixin, DraggingMixin
+    BaseVisualStim, ColorMixin, ContainerMixin, WindowMixin, DraggingMixin, PointerMixin
 )
 from psychopy.tools.attributetools import attributeSetter, setAttribute
 from psychopy.tools import mathtools as mt
 from psychopy.colors import Color
 from psychopy.tools.fontmanager import FontManager, GLFont
+from psychopy.tools import gltools as gt
 from .. import shaders
 from ..rect import Rect
 from ... import core, alerts, layout
 
 from psychopy.tools.linebreak import get_breakable_points, break_units
+
+import pyglet
+USE_LEGACY_GL = pyglet.version < '2.0'
+import pyglet.gl as gl
 
 allFonts = FontManager()
 
@@ -66,10 +72,13 @@ debug = False
 # If text is ". " we don't want to start next line with single space?
 
 
-class TextBox2(BaseVisualStim, DraggingMixin, ContainerMixin, ColorMixin):
+class TextBox2(BaseVisualStim, PointerMixin, DraggingMixin, ContainerMixin, ColorMixin):
     def __init__(self, win, text,
-                 font="Open Sans",
-                 pos=(0, 0), units=None, letterHeight=None,
+                 font="Noto Sans",
+                 pos=(0, 0),
+                 units=None,
+                 letterHeight=None,
+                 ori=0,
                  size=None,
                  color=(1.0, 1.0, 1.0), colorSpace='rgb',
                  fillColor=None, fillColorSpace=None,
@@ -79,7 +88,7 @@ class TextBox2(BaseVisualStim, DraggingMixin, ContainerMixin, ColorMixin):
                  bold=False,
                  italic=False,
                  placeholder="Type here...",
-                 lineSpacing=None,
+                 lineSpacing=1.0,
                  letterSpacing=None,
                  padding=None,  # gap between box and text
                  speechPoint=None,
@@ -96,13 +105,16 @@ class TextBox2(BaseVisualStim, DraggingMixin, ContainerMixin, ColorMixin):
                  autoLog=None,
                  autoDraw=False,
                  depth=0,
-                 onTextCallback=None):
+                 onTextCallback=None,
+                 clickable=True):
         """
 
         Parameters
         ----------
-        win
-        text
+        win : Window
+            The window this stimulus is associated with.
+        text : str
+            The text to display in the TextBox.
         font
         pos
         units
@@ -146,6 +158,7 @@ class TextBox2(BaseVisualStim, DraggingMixin, ContainerMixin, ColorMixin):
         self.colorSpace = colorSpace
         ColorMixin.foreColor.fset(self, color)  # Have to call the superclass directly on init as text has not been set
         self.onTextCallback = onTextCallback
+        self.clickable = clickable
         self.draggable = draggable
 
         # Box around the whole textbox - drawn
@@ -190,12 +203,13 @@ class TextBox2(BaseVisualStim, DraggingMixin, ContainerMixin, ColorMixin):
         self._pixelScaling = self.letterHeightPix / self.letterHeight
         self.bold = bold
         self.italic = italic
+        if lineSpacing is None:
+            lineSpacing = 1.0
+        self.lineSpacing = lineSpacing
         self.glFont = None  # will be set by the self.font attribute setter
         self.font = font
-        if lineSpacing is not None:
-            self.lineSpacing = lineSpacing
         self.letterSpacing = letterSpacing
-        # If font not found, default to Open Sans Regular and raise alert
+        # If font not found, default to Noto Sans Regular and raise alert
         if not self.glFont:
             alerts.alert(4325, self, {
                 'font': font,
@@ -204,7 +218,7 @@ class TextBox2(BaseVisualStim, DraggingMixin, ContainerMixin, ColorMixin):
                 'name': self.name})
             self.bold = False
             self.italic = False
-            self.font = "Open Sans"
+            self.font = "Noto Sans"
 
         # once font is set up we can set the shader (depends on rgb/a of font)
         if self.glFont.atlas.format == 'rgb':
@@ -246,6 +260,9 @@ class TextBox2(BaseVisualStim, DraggingMixin, ContainerMixin, ColorMixin):
         self.languageStyle = languageStyle
         self._text = ''
         self.text = self.startText = text if text is not None else ""
+
+        # now that we have text, set orientation
+        self.ori = ori
 
         # Initialise arabic reshaper
         arabic_config = {'delete_harakat': False,  # if present, retain any diacritics
@@ -353,7 +370,7 @@ class TextBox2(BaseVisualStim, DraggingMixin, ContainerMixin, ColorMixin):
             self.caret.color = self._foreColor
 
     @attributeSetter
-    def font(self, fontName, italic=False, bold=False):
+    def font(self, fontName):
         if isinstance(fontName, GLFont):
             self.glFont = fontName
             self.__dict__['font'] = fontName.name
@@ -362,7 +379,9 @@ class TextBox2(BaseVisualStim, DraggingMixin, ContainerMixin, ColorMixin):
             self.glFont = allFonts.getFont(
                     fontName,
                     size=self.letterHeightPix,
-                    bold=self.bold, italic=self.italic)
+                    bold=self.bold,
+                    italic=self.italic,
+                    lineSpacing=self.lineSpacing)
 
     @attributeSetter
     def overflow(self, value):
@@ -469,8 +488,8 @@ class TextBox2(BaseVisualStim, DraggingMixin, ContainerMixin, ColorMixin):
         if hasattr(self, "box"):
             self.box.size = self._pos
         if hasattr(self, "contentBox"):
-            # Content box should be anchored center relative to box, but its pos needs to be relative to box's vertices, not its pos
-            self.contentBox.pos = self.pos + self.size * self.box._vertices.anchorAdjust
+            # set content box pos with offset for anchor (accounting for orientation)
+            self.contentBox.pos = self.pos + np.dot(self.size * self.box._vertices.anchorAdjust, self._rotationMatrix)
             self.contentBox._needVertexUpdate = True
         if hasattr(self, "_placeholder"):
             self._placeholder.pos = self._pos
@@ -598,25 +617,17 @@ class TextBox2(BaseVisualStim, DraggingMixin, ContainerMixin, ColorMixin):
             # If given an array, convert it to a Vector
             self._letterHeight = layout.Size(value, units=self.units, win=self.win)
 
+    def setLetterHeight(self, value, log=None):
+        setAttribute(
+            self, "letterHeight", value=value, log=log
+        )
+
     @property
     def letterHeightPix(self):
         """
         Convenience function to get self._letterHeight.pix and be guaranteed a return that is a single integer
         """
         return self._letterHeight.pix[1]
-
-    @property
-    def lineSpacing(self):
-        if hasattr(self.glFont, "lineSpacing"):
-            return self.glFont.lineSpacing
-
-    @lineSpacing.setter
-    def lineSpacing(self, value):
-        if hasattr(self, "_placeholder"):
-            self._placeholder.lineSpacing = value
-        if hasattr(self.glFont, "lineSpacing"):
-            self.glFont.lineSpacing = value
-        self._needVertexUpdate = True
 
     @attributeSetter
     def letterSpacing(self, value):
@@ -925,6 +936,9 @@ class TextBox2(BaseVisualStim, DraggingMixin, ContainerMixin, ColorMixin):
 
                 # are we wrapping the line?
                 if charcode == "\n":
+                    # check if we have stored the top/bottom of the previous line yet
+                    if lineN + 1 > len(_lineBottoms):
+                        _lineBottoms.append(current[1])
                     lineWPix = current[0]
                     current[0] = 0
                     current[1] -= font.height
@@ -1171,8 +1185,11 @@ class TextBox2(BaseVisualStim, DraggingMixin, ContainerMixin, ColorMixin):
             # Adjust vertices
             vertices[:, 0] = vertices[:, 0] + adjustX
 
-        # Convert the vertices to be relative to content box and set
-        self.vertices = vertices / self.contentBox._size.pix + (-0.5, 0.5)
+        # convert the vertices to be relative to content box and set
+        vertices = vertices / self.contentBox._size.pix + (-0.5, 0.5)
+        # apply orientation
+        self.vertices = (vertices * self.size).dot(self._rotationMatrix) / self.size
+
         if len(_lineBottoms):
             if self.flipVert:
                 self._lineBottoms = min(self.contentBox._vertices.pix[:, 1]) - np.array(_lineBottoms)
@@ -1189,17 +1206,71 @@ class TextBox2(BaseVisualStim, DraggingMixin, ContainerMixin, ColorMixin):
             self.glFont._dirty = False
         self._needVertexUpdate = True
 
+    @attributeSetter
+    def ori(self, value):
+        # get previous orientaiton
+        lastOri = self.__dict__.get("ori", 0)
+        # set new value
+        BaseVisualStim.ori.func(self, value)
+        # set on all boxes
+        self.box.ori = value
+        self.boundingBox.ori = value
+        self.contentBox.ori = value
+        # trigger layout if value has changed
+        if lastOri != value:
+            self._layout()
+
+    def _drawLegacyGL(self):
+        """Legacy draw routine for older GL versions.
+        """
+        gl.glPushMatrix()
+        self.win.setScale('pix')
+
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self.glFont.textureID)
+        gl.glEnable(gl.GL_TEXTURE_2D)
+        gl.glDisable(gl.GL_DEPTH_TEST)
+
+        gl.glEnableClientState(gl.GL_VERTEX_ARRAY)
+        gl.glEnableClientState(gl.GL_COLOR_ARRAY)
+        gl.glEnableClientState(gl.GL_TEXTURE_COORD_ARRAY)
+        gl.glEnableClientState(gl.GL_VERTEX_ARRAY)
+
+        gl.glVertexPointer(2, gl.GL_DOUBLE, 0, self.verticesPix.ctypes)
+        gl.glColorPointer(4, gl.GL_DOUBLE, 0, self._colors.ctypes)
+        gl.glTexCoordPointer(2, gl.GL_DOUBLE, 0, self._texcoords.ctypes)
+
+        self.shader.bind()
+        self.shader.setInt('texture', 0)
+        self.shader.setFloat('pixel', [1.0 / 512, 1.0 / 512])
+        nVerts = (len(self._text) + len(self._renderChars)) * 4
+
+        gl.glDrawArrays(gl.GL_QUADS, 0, nVerts)
+        self.shader.unbind()
+
+        # removed the colors and font texture
+        gl.glDisableClientState(gl.GL_COLOR_ARRAY)
+        gl.glDisableClientState(gl.GL_TEXTURE_COORD_ARRAY)
+        gl.glDisableVertexAttribArray(1)
+        gl.glDisableClientState(gl.GL_VERTEX_ARRAY)
+
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+        gl.glDisable(gl.GL_TEXTURE_2D)
+
+        if self.hasFocus:  # draw caret line
+            self.caret.draw()
+
+        gl.glPopMatrix()
+
     def draw(self):
         """Draw the text to the back buffer"""
         # Border width
         self.box.setLineWidth(self.palette['lineWidth']) # Use 1 as base if border width is none
-        #self.borderWidth = self.box.lineWidth
         # Border colour
         self.box.setLineColor(self.palette['lineColor'], colorSpace='rgb')
-        #self.borderColor = self.box.lineColor
         # Background
         self.box.setFillColor(self.palette['fillColor'], colorSpace='rgb')
-        #self.fillColor = self.box.fillColor
 
         # Inherit win
         self.box.win = self.win
@@ -1245,45 +1316,48 @@ class TextBox2(BaseVisualStim, DraggingMixin, ContainerMixin, ColorMixin):
             # Activate aperture
             self.container.enable()
 
-        gl.glPushMatrix()
-        self.win.setScale('pix')
+        if self.win.USE_LEGACY_GL:
+            self._drawLegacyGL()
+        else:
+            self._selectWindow(self.win)
 
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self.glFont.textureID)
-        gl.glEnable(gl.GL_TEXTURE_2D)
-        gl.glDisable(gl.GL_DEPTH_TEST)
+            self.win.setScale('pix')
+            self.win.setOrthographicView()
 
-        gl.glEnableClientState(gl.GL_VERTEX_ARRAY)
-        gl.glEnableClientState(gl.GL_COLOR_ARRAY)
-        gl.glEnableClientState(gl.GL_TEXTURE_COORD_ARRAY)
-        gl.glEnableClientState(gl.GL_VERTEX_ARRAY)
+            gl.glActiveTexture(gl.GL_TEXTURE0)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, self.glFont.textureID)
+            gl.glEnable(gl.GL_TEXTURE_2D)
+            gl.glDisable(gl.GL_DEPTH_TEST)
 
-        gl.glVertexPointer(2, gl.GL_DOUBLE, 0, self.verticesPix.ctypes)
-        gl.glColorPointer(4, gl.GL_DOUBLE, 0, self._colors.ctypes)
-        gl.glTexCoordPointer(2, gl.GL_DOUBLE, 0, self._texcoords.ctypes)
+            prog = self.shader.handle
+            gt.useProgram(prog)
+            gt.setUniformSampler2D(prog, b'uTexture', 0)
+            gt.setUniformValue(prog, b'uColor', self._foreColor.render('rgba1'))
+            gt.setUniformMatrix(
+                prog, 
+                b'uModelViewMatrix', 
+                self.win._viewMatrix,
+                transpose=True)
+            gt.setUniformMatrix(
+                prog, 
+                b'uProjectionMatrix', 
+                self.win._projectionMatrix,
+                transpose=True)
 
-        self.shader.bind()
-        self.shader.setInt('texture', 0)
-        self.shader.setFloat('pixel', [1.0 / 512, 1.0 / 512])
-        nVerts = (len(self._text) + len(self._renderChars)) * 4
+            gt.drawClientArrays({
+                'gl_Vertex': self.verticesPix,
+                'gl_Color': self._colors,
+                'gl_MultiTexCoord0': self._texcoords}, 
+                'GL_QUADS')
+        
+            gt.useProgram(None)
 
-        gl.glDrawArrays(gl.GL_QUADS, 0, nVerts)
-        self.shader.unbind()
+            gl.glActiveTexture(gl.GL_TEXTURE0)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            gl.glDisable(gl.GL_TEXTURE_2D)
 
-        # removed the colors and font texture
-        gl.glDisableClientState(gl.GL_COLOR_ARRAY)
-        gl.glDisableClientState(gl.GL_TEXTURE_COORD_ARRAY)
-        gl.glDisableVertexAttribArray(1)
-        gl.glDisableClientState(gl.GL_VERTEX_ARRAY)
-
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
-        gl.glDisable(gl.GL_TEXTURE_2D)
-
-        if self.hasFocus:  # draw caret line
-            self.caret.draw()
-
-        gl.glPopMatrix()
+            if self.hasFocus:  # draw caret line
+                self.caret.draw()
 
         # Draw placeholder if blank
         if self.editable and len(self.text) == 0:
@@ -1477,6 +1551,59 @@ class TextBox2(BaseVisualStim, DraggingMixin, ContainerMixin, ColorMixin):
         else:
             print("Received unhandled cursor motion type: ", key)
 
+    def getCharAtPos(self, pos):
+        """Get the character index at a given position.
+        
+        This can be used to determine what character is under the specified 
+        position in the stimulus.
+
+        Parameters
+        ----------
+        pos : list, tuple
+            Position in stimulus units.
+
+        Returns
+        -------
+        int or None
+            Index of character at the given position. Returns None if no 
+            character is at the given position or if the position is outside
+            the stimulus bounds.
+            
+        """
+        px, py = pos[0] * 2.0, pos[1] * 2.0   # why x2?
+
+        # read verticies in blocks of 4
+        for i in range(0, len(self.vertices), 4):
+            # get the four corners of the character
+            charVertices = self.vertices[i:i + 4]
+            
+            x0, y0 = charVertices[0]  # top-left
+            x1, y1 = charVertices[2]  # bottom-right
+
+            # check if the mouse is within the bounds of the character
+            if x0 <= px <= x1 and y0 >= py >= y1:
+                toReturn = i // 4
+                return toReturn
+
+        return None
+
+    def _onMouse(self):
+        """Called by the window when the mouse is inside the stimulus.
+        """
+
+        if not self.editable:
+            return
+
+        # get button state
+        buttons = self.mouse.getPressed()
+        leftMbDn, middleMbDn, rightMbDn = buttons
+        if leftMbDn:
+            # get the character index at the given position
+            charIdxAtPointer = self.getCharAtPos(self.mouse.getPos())
+
+            if charIdxAtPointer:
+                self.caret.index = charIdxAtPointer
+
     @property
     def hasFocus(self):
         if self.win and self.win.currentEditable == self:
@@ -1577,6 +1704,19 @@ class Caret(ColorMixin):
         self.colorSpace = colorSpace
         self.color = color
 
+    def _drawLegacyGL(self):
+        """Legacy drawing code for older GL versions.
+        """
+        # If no override and conditions are met, or override is True, draw
+        gl.glLineWidth(self.width)
+        gl.glColor4f(
+            *self._foreColor.rgba1
+        )
+        gl.glBegin(gl.GL_LINES)
+        gl.glVertex2f(self.vertices[0, 0], self.vertices[0, 1])
+        gl.glVertex2f(self.vertices[1, 0], self.vertices[1, 1])
+        gl.glEnd()
+
     def draw(self, override=None):
         """
         Draw the caret
@@ -1598,16 +1738,29 @@ class Caret(ColorMixin):
         elif not override:
             # If override is False, never draw
             return
+        
+        if USE_LEGACY_GL:
+            self._drawLegacyGL()
+            return
 
         # If no override and conditions are met, or override is True, draw
-        gl.glLineWidth(self.width)
-        gl.glColor4f(
-            *self._foreColor.rgba1
-        )
-        gl.glBegin(gl.GL_LINES)
-        gl.glVertex2f(self.vertices[0, 0], self.vertices[0, 1])
-        gl.glVertex2f(self.vertices[1, 0], self.vertices[1, 1])
-        gl.glEnd()
+        prog = self.win._progSignedFrag
+        gt.useProgram(prog)
+        gt.setLineWidth(self.width)
+        gt.setUniformValue(prog, 'uColor', self._foreColor.rgba1)
+        gt.setUniformMatrix(
+            prog, 
+            b'uProjectionMatrix', 
+            self.win.projectionMatrix,
+            transpose=True)
+        gt.setUniformMatrix(
+            prog, 
+            b'uModelViewMatrix', 
+            self.win.viewMatrix,
+            transpose=True)
+        gt.drawClientArrays({
+            'gl_Vertex': self.vertices}, 'lines')
+        gt.useProgram(None)
 
     @property
     def visible(self):
@@ -1623,6 +1776,8 @@ class Caret(ColorMixin):
             self.index = len(self.textbox._lineNs)
         # Get line of index
         if self.index >= len(self.textbox._lineNs):
+            if len(self.textbox._lineBottoms) - 1 > self.textbox._lineNs[-1]:
+                return len(self.textbox._lineBottoms) - 1
             return self.textbox._lineNs[-1]
         else:
             return self.textbox._lineNs[self.index]
@@ -1713,9 +1868,12 @@ class Caret(ColorMixin):
         else:
             # Otherwise, get caret position from character vertices
             if self.index >= len(textbox._lineNs):
-                # If the caret is after the last char, position it to the right
-                chrVerts = textbox._vertices.pix[range((ii-1) * 4, (ii-1) * 4 + 4)]
-                x = chrVerts[2, 0]  # x-coord of left edge (of final char)
+                if len(textbox._lineBottoms) - 1 > textbox._lineNs[-1]:
+                    x = textbox._lineWidths[len(textbox._lineBottoms) - 1]
+                else:
+                    # If the caret is after the last char, position it to the right
+                    chrVerts = textbox._vertices.pix[range((ii-1) * 4, (ii-1) * 4 + 4)]
+                    x = chrVerts[2, 0]  # x-coord of left edge (of final char)
             else:
                 # Otherwise, position it to the left
                 chrVerts = textbox._vertices.pix[range(ii * 4, ii * 4 + 4)]

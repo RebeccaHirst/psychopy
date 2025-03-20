@@ -5,7 +5,7 @@
 '''
 
 # Part of the PsychoPy library
-# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2022 Open Science Tools Ltd.
+# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2025 Open Science Tools Ltd.
 # Distributed under the terms of the GNU General Public License (GPL).
 
 import os
@@ -242,9 +242,20 @@ class TextStim(BaseVisualStim, DraggingMixin, ForeColorMixin, ContainerMixin):
         if GL:  # because of pytest fail otherwise
             try:
                 GL.glDeleteLists(self._listID, 1)
-            except (ImportError, ModuleNotFoundError, TypeError):
+            except (ImportError, ModuleNotFoundError, TypeError, GL.lib.GLException):
                 pass  # if pyglet no longer exists
+    
+    @property
+    def opacity(self):
+        return BaseVisualStim.opacity.fget(self)
 
+    @opacity.setter
+    def opacity(self, value):
+        # do base setting
+        BaseVisualStim.opacity.fset(self, value)
+        # trigger update
+        self._needSetText = True
+    
     @attributeSetter
     def height(self, height):
         """The height of the letters (Float/int or None = set default).
@@ -282,6 +293,11 @@ class TextStim(BaseVisualStim, DraggingMixin, ForeColorMixin, ContainerMixin):
         self.height = getattr(self._size, self.units)[1]
 
     def setHeight(self, height, log=None):
+        """Usually you can use 'stim.attribute = value' syntax instead,
+        but use this method if you need to suppress the log message. """
+        setAttribute(self, 'height', height, log)
+
+    def setLetterHeight(self, height, log=None):
         """Usually you can use 'stim.attribute = value' syntax instead,
         but use this method if you need to suppress the log message. """
         setAttribute(self, 'height', height, log)
@@ -480,7 +496,6 @@ class TextStim(BaseVisualStim, DraggingMixin, ForeColorMixin, ContainerMixin):
         if self.win.winType in ["pyglet", "glfw"]:
             # unbind the main texture
             GL.glActiveTexture(GL.GL_TEXTURE0)
-#            GL.glActiveTextureARB(GL.GL_TEXTURE0_ARB)
             # the texture is specified by pyglet.font.GlyphString.draw()
             GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
             GL.glEnable(GL.GL_TEXTURE_2D)

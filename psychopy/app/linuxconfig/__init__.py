@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 # Part of the PsychoPy library
-# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2022 Open Science Tools Ltd.
+# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2025 Open Science Tools Ltd.
 # Distributed under the terms of the GNU General Public License (GPL).
 
 """Dialog prompting the user to configure their system for Linux specific
@@ -19,6 +19,7 @@ import sys
 
 import wx
 from .ui import BaseLinuxConfigDialog
+from ...core import rush
 
 # Text that appears at the top of the dialog with provides instructions to the
 # user.
@@ -142,3 +143,11 @@ def linuxConfigFileExists():
         return True
 
     return os.path.isfile(_confPath)
+
+def linuxRushAllowed():
+    if sys.platform != 'linux':
+        return True
+
+    success = rush(1)
+    rush(0)
+    return success

@@ -56,7 +56,7 @@
     # display tips when starting PsychoPy
     showStartupTips = boolean(default='True')
     # what windows to display when PsychoPy starts
-    defaultView = option('builder', 'coder', 'runner', 'all', default='all')
+    defaultView = option('last', 'builder', 'coder', 'runner', 'all', default='last')
     # reset preferences to defaults on next restart of PsychoPy
     resetPrefs = boolean(default='False') # default must be False!
     # save any unsaved preferences before closing the window
@@ -131,9 +131,9 @@
 # Settings for hardware
 [hardware]
     # LEGACY: choice of audio library
-    audioLib = list(default=list('PTB', 'sounddevice', 'pyo', 'pygame'))
-    # LEGACY: latency mode for PsychToolbox audio (3 is good for most applications. See
-    audioLatencyMode = option(0, 1, 2, 3, 4, default=3)
+    audioLib = list(default=list('ptb', 'sounddevice', 'pyo', 'pygame'))
+    # exclude non-WASAPI audio devices
+    audioWASAPIOnly = boolean(default=True)
     # audio driver to use
     audioDriver = list(default=list('Primary Sound','ASIO','Audigy'))
     # audio device to use (if audioLib allows control)
@@ -147,8 +147,20 @@
 [piloting]
     # Prevent the experiment from being fullscreen when piloting
     forceWindowed = boolean(default=True)
-    # How much output to include in the log files when piloting ('error' is fewest messages, 'debug' is most)
+    # Always show the mouse when piloting
+    forceMouseVisible = boolean(default=True)
+    # What window size to use when forced to windowed mode
+    forcedWindowSize = list(default=list(800, 600))
+    # How much output to include in the log file when piloting ('error' is fewest messages, 'debug' is most)
     pilotLoggingLevel = option('error', 'warning', 'data', 'exp', 'info', 'debug', default='debug')
+    # How much output to display in the console / app when piloting ('error' is fewest messages, 'debug' is most).
+    pilotConsoleLoggingLevel = option('error', 'warning', 'data', 'exp', 'info', 'debug', default='warning')
+    # Show an orange border around the window when in piloting mode
+    showPilotingIndicator = boolean(default=True)
+    # Prevent experiment from enabling rush mode when piloting
+    forceNonRush = boolean(default=True)
+    # Replace default participant ID with "pilot" when piloting
+    replaceParticipantID = boolean(default=True)
 
 # Settings for connections
 [connections]
@@ -173,6 +185,8 @@
     save = string(default='Ctrl+S')
     # save a Builder or Coder file under a new name
     saveAs = string(default='Ctrl+Shift+S')
+    # reveal the folder containing the current Builder file
+    revealFolder = string(default='Alt+Shift+R')
     # Coder: print the file
     print = string(default='Ctrl+P')
     # close the Builder or Coder window
@@ -237,6 +251,8 @@
     # Coder: show / hide indentation level lines
     toggleIndentGuides = string(default='Ctrl+Shift+I')
 
+    # Builder: edit experiment settings
+    expSettings = string(default='Ctrl+Shift+X')
     # Builder: create a new routine
     newRoutine = string(default='Ctrl+Shift+N')
     # Builder: copy an existing routine

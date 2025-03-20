@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 # Part of the PsychoPy library
-# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2022 Open Science Tools Ltd.
+# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2025 Open Science Tools Ltd.
 # Distributed under the terms of the GNU General Public License (GPL).
 
 from pathlib import Path
@@ -80,7 +80,7 @@ class MovieComponent(BaseVisualComponent):
 
         msg = _translate("How loud should audio be played?")
         self.params["volume"] = Param(
-            volume, valType='num', inputType="float", categ='Playback',
+            volume, valType='num', inputType="single", categ='Playback',
             hint=msg,
             label=_translate("Volume"))
 
@@ -180,53 +180,6 @@ class MovieComponent(BaseVisualComponent):
                 "    )\n")
         buff.writeIndentedLines(code % depth)
 
-    def _writeCreationCodeJS(self, buff, useInits):
-
-        # If we're in writeInitCode then we need to convert params to initVals
-        # because some (variable) params haven't been created yet.
-        if useInits:
-            inits = getInitVals(self.params)
-        else:
-            inits = copy.deepcopy(self.params)
-        inits['depth'] = -self.getPosInRoutine()
-
-        noAudio = '{}'.format(inits['No audio'].val).lower()
-        loop = '{}'.format(inits['loop'].val).lower()
-
-        for param in inits:
-            if inits[param] in ['', None, 'None', 'none', 'from exp settings']:
-                inits[param].val = 'undefined'
-                inits[param].valType = 'code'
-
-        code = "{name}Clock = new util.Clock();\n".format(**inits)
-        buff.writeIndented(code)
-
-        code = ("{name} = new visual.MovieStim({{\n"
-                "  win: psychoJS.window,\n"
-                "  name: '{name}',\n"
-                "  units: {units},\n"
-                "  movie: {movie},\n"
-                "  pos: {pos},\n"
-                "  anchor: {anchor},\n"
-                "  size: {size},\n"
-                "  ori: {ori},\n"
-                "  opacity: {opacity},\n"
-                "  loop: {loop},\n"
-                "  noAudio: {noAudio},\n"
-                "  depth: {depth}\n"
-                "  }});\n").format(name=inits['name'],
-                                   movie=inits['movie'],
-                                   units=inits['units'],
-                                   pos=inits['pos'],
-                                   anchor=inits['anchor'],
-                                   size=inits['size'],
-                                   ori=inits['ori'],
-                                   loop=loop,
-                                   opacity=inits['opacity'],
-                                   noAudio=noAudio,
-                                   depth=inits['depth'])
-        buff.writeIndentedLines(code)
-
     def writeInitCode(self, buff):
         # Get init values
         params = getInitVals(self.params)
@@ -266,14 +219,50 @@ class MovieComponent(BaseVisualComponent):
         buff.writeIndentedLines(code % params)
 
     def writeInitCodeJS(self, buff):
-        # create the code using init vals
-        self._writeCreationCodeJS(buff, useInits=True)
+        # get init values
+        inits = getInitVals(self.params)
+        inits['depth'] = -self.getPosInRoutine()
+        # choose a movie attribute
+        if "youtube.com/watch" in str(inits['movie'].val):
+            inits['movieAttr'] = "youtubeUrl"
+        else:
+            inits['movieAttr'] = "movie"
+        # create a movie stim
+        code = (
+            "%(name)sClock = new util.Clock();\n"
+            "%(name)s = new visual.MovieStim({\n"
+            "  win: psychoJS.window,\n"
+            "  %(movieAttr)s: %(movie)s,\n"
+            "  name: '%(name)s',\n"
+            "  units: %(units)s,\n"
+            "  pos: %(pos)s,\n"
+            "  anchor: %(anchor)s,\n"
+            "  size: %(size)s,\n"
+            "  ori: %(ori)s,\n"
+            "  opacity: %(opacity)s,\n"
+            "  loop: %(loop)s,\n"
+            "  noAudio: %(No audio)s,\n"
+            "  depth: %(depth)s\n"
+            "})\n"
+        )
+        buff.writeIndentedLines(code % inits)
 
     def writeFrameCode(self, buff):
         """Write the code that will be called every frame
         """
         buff.writeIndented("\n")
         buff.writeIndented("# *%s* updates\n" % self.params['name'])
+
+        # set parameters that need updating every frame
+        # do any params need updating? (this method inherited from _base)
+        if self.checkNeedToUpdate('set every frame'):
+            code = "if %(name)s.status == STARTED:  # only update if being drawn\n" % self.params
+            buff.writeIndented(code)
+
+            buff.setIndentLevel(+1, relative=True)  # to enter the if block
+            self.writeParamUpdates(buff, 'set every frame')
+            buff.setIndentLevel(-1, relative=True)  # to exit the if block
+
         # writes an if statement to determine whether to draw etc
         indented = self.writeStartTestCode(buff)
         if indented:
@@ -286,7 +275,8 @@ class MovieComponent(BaseVisualComponent):
         # because of the 'if' statement of the time test
         buff.setIndentLevel(-indented, relative=True)
 
-        indented = self.writeStopTestCode(buff)
+        # write code for stopping
+        indented = self.writeStopTestCode(buff, extra=" or %(name)s.isFinished")
         if indented:
             code = (
                 "%(name)s.setAutoDraw(False)\n"
@@ -296,15 +286,7 @@ class MovieComponent(BaseVisualComponent):
             buff.writeIndentedLines(code % self.params)
         # to get out of the if statement
         buff.setIndentLevel(-indented, relative=True)
-        # set parameters that need updating every frame
-        # do any params need updating? (this method inherited from _base)
-        if self.checkNeedToUpdate('set every frame'):
-            code = "if %(name)s.status == STARTED:  # only update if being drawn\n" % self.params
-            buff.writeIndented(code)
 
-            buff.setIndentLevel(+1, relative=True)  # to enter the if block
-            self.writeParamUpdates(buff, 'set every frame')
-            buff.setIndentLevel(-1, relative=True)  # to exit the if block
         # do force end of trial code
         if self.params['forceEndRoutine'].val is True:
             code = ("if %s.isFinished:  # force-end the Routine\n"

@@ -20,15 +20,16 @@ class UnknownComponent(BaseComponent):
     tooltip = _translate('Unknown: A component that is not known by the current '
                          'installed version of PsychoPy\n(most likely from the '
                          'future)')
+    # hide from the Components panel
+    hidden = True
 
     def __init__(self, exp, parentName, name='', compType="UnknownComponent"):
-        self.type = compType
         self.exp = exp  # so we can access the experiment if necess
         self.parentName = parentName  # to access the routine too if needed
         self.params = {}
         self.depends = []
         super(UnknownComponent, self).__init__(exp, parentName, name=name)
-        self.order += []
+        self.type = compType
 
     @property
     def _xml(self):

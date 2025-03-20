@@ -4,12 +4,13 @@ from abc import ABC
 import numpy
 import wx
 from pathlib import Path
-from psychopy import prefs
+from psychopy import prefs, logging
 from . import theme as appTheme
 
 retStr = ""
 resources = Path(prefs.paths['resources'])
 iconCache = {}
+pluginIconFiles = []
 
 
 class BaseIcon:
@@ -18,7 +19,7 @@ class BaseIcon:
         self.bitmaps = {}
         self._bitmap = None
         self.size = size
-
+        self.stem = stem
         if theme in (appTheme.icons, None) and stem in iconCache:
             # Duplicate relevant attributes if relevant (depends on subclass)
             self.bitmaps = iconCache[stem].bitmaps
@@ -30,6 +31,19 @@ class BaseIcon:
             # Store ref to self in iconCache if using app theme
             if theme in (appTheme.icons, None):
                 iconCache[stem] = self
+    
+    def reload(self, theme=None):
+        """
+        Get all images associated with this icon again. This is useful when changeing theme to one 
+        with different icons.
+
+        Parameters
+        ----------
+        theme : str, optional
+            Theme to get icons from, by default will use the current theme
+        """
+        self._populate(stem=self.stem, theme=theme)
+
 
     def _populate(self, stem, theme=None):
         raise NotImplementedError(
@@ -131,7 +145,7 @@ class ButtonIcon(BaseIcon):
         if theme is None:
             theme = appTheme.icons
         # Get all files in the resource folder containing the given stem
-        matches = [f for f in resources.glob(f"**/{stem}*.png")]
+        matches = [f for f in resources.glob(f"**/{stem}*.png")] + pluginIconFiles
         # Create blank arrays to store retina and non-retina files
         ret = {}
         nret = {}

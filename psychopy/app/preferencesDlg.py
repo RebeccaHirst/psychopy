@@ -15,7 +15,7 @@ from psychopy.app.themes import icons
 from . import dialogs
 from psychopy import localization, prefs
 from psychopy.localization import _translate
-from pkg_resources import parse_version
+from packaging.version import Version
 from psychopy import sound
 from psychopy.app.utils import getSystemFonts
 import collections
@@ -190,7 +190,7 @@ class PrefPropGrid(wx.Panel):
         self.helpText[name] = helpText
 
     def addDirItem(self, section, label=wx.propgrid.PG_LABEL,
-                    name=wx.propgrid.PG_LABEL, value='', helpText=""):
+                   name=wx.propgrid.PG_LABEL, value='', helpText=""):
         if section not in self.sections.keys():
             self.sections[section] = dict()
 
@@ -430,12 +430,17 @@ class PreferencesDlg(wx.Dialog):
         # get sound devices for "audioDevice" property
         try:
             devnames = sorted(sound.getDevices('output'))
-        except (ValueError, OSError, ImportError):
+            # prefs need to have a default value, but we need an actual device - so remove it from 
+            # the dialog
+            if 'default' in devnames:
+                devnames.pop('default')
+
+        except (ValueError, OSError, ImportError, AttributeError):
             devnames = []
 
         audioConf = self.prefsCfg['hardware']['audioDevice']
         self.audioDevDefault = audioConf \
-            if type(audioConf) != list else list(audioConf)
+            if type(audioConf) is list else list(audioConf)
         self.audioDevNames = [
             dev.replace('\r\n', '') for dev in devnames
             if dev != self.audioDevDefault]
@@ -479,7 +484,7 @@ class PreferencesDlg(wx.Dialog):
                     hint = hints[-1].lstrip().lstrip('#').lstrip()
                     helpText = _translate(hint)
 
-                if type(thisPref) == bool:
+                if type(thisPref) is bool:
                     # only True or False - use a checkbox
                     self.proPrefs.addBoolItem(
                         sectionName, pLabel, prefName, thisPref,
@@ -521,7 +526,8 @@ class PreferencesDlg(wx.Dialog):
                         # set default locale ''
                         default = locales.index('')
                     # '' must be appended after other labels are translated
-                    labels = [_translate('system locale') + i for i in self.app.localization.available]
+                    labels = self.app.localization.available.copy()
+                    labels.insert(0, _translate('system locale'))
                     self.proPrefs.addEnumItem(
                             sectionName,
                             pLabel,
@@ -551,36 +557,6 @@ class PreferencesDlg(wx.Dialog):
                             labels=labels,
                             values=[i for i in range(len(labels))],
                             value=default, helpText=helpText)
-                # # audio latency mode for the PTB driver
-                elif prefName == 'audioLatencyMode':
-                    # get the labels from above
-                    labels = []
-                    for val, labl in audioLatencyLabels.items():
-                        labels.append(u'{}: {}'.format(val, labl))
-
-                    # get the options from the config file spec
-                    vals = thisSpec.replace("option(", "").replace("'", "")
-                    # item -1 is 'default=x' from spec
-                    vals = vals.replace(", ", ",").split(',')
-
-                    try:
-                        # set the field to the value in the pref
-                        default = int(thisPref)
-                    except ValueError:
-                        try:
-                            # use first if default not in list
-                            default = int(vals[-1].strip('()').split('=')[1])
-                        except (IndexError, TypeError, ValueError):
-                            # no default
-                            default = 0
-
-                    self.proPrefs.addEnumItem(
-                            sectionName,
-                            pLabel,
-                            prefName,
-                            labels=labels,
-                            values=[i for i in range(len(labels))],
-                            value=default, helpText=helpText)
                 # # option items are given a dropdown, current value is shown
                 # # in the box
                 elif thisSpec.startswith('option') or prefName == 'audioDevice':
@@ -588,7 +564,7 @@ class PreferencesDlg(wx.Dialog):
                         options = self.audioDevNames
                         try:
                             default = self.audioDevNames.index(
-                                self.audioDevDefault)
+                                self.audioDevDefault[0])
                         except ValueError:
                             default = 0
                     else:
@@ -663,8 +639,8 @@ class PreferencesDlg(wx.Dialog):
                     self.app.theme = self.prefsCfg[sectionName][prefName] = self.themeList[thisPref]
                     continue
                 elif prefName == 'audioDevice':
-                    self.prefsCfg[sectionName][prefName] = \
-                        self.audioDevNames[thisPref]
+                    self.audioDevDefault = [self.audioDevNames[thisPref]]
+                    self.prefsCfg[sectionName][prefName] = self.audioDevDefault
                     continue
                 elif prefName == 'locale':
                     # '' corresponds to system locale
@@ -694,7 +670,7 @@ class PreferencesDlg(wx.Dialog):
                     try:
                         # if thisPref is not a null string, do eval() to get a
                         # list.
-                        if thisPref == '' or type(thisPref) == list:
+                        if thisPref == '' or type(thisPref) is list:
                             newVal = thisPref
                         else:
                             newVal = eval(thisPref)
@@ -712,7 +688,7 @@ class PreferencesDlg(wx.Dialog):
                                                         title=title)
                         warnDlg.ShowModal()
                         return
-                    if type(newVal) != list:
+                    if type(newVal) is not list:
                         self.prefsCfg[sectionName][prefName] = [newVal]
                     else:
                         self.prefsCfg[sectionName][prefName] = newVal
@@ -780,7 +756,7 @@ class PreferencesDlg(wx.Dialog):
 
 if __name__ == '__main__':
     from psychopy import preferences
-    if parse_version(wx.__version__) < parse_version('2.9'):
+    if Version(wx.__version__) < Version('2.9'):
         app = wx.PySimpleApp()
     else:
         app = wx.App(False)

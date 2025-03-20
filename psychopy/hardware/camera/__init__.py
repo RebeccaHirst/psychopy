@@ -8,7 +8,7 @@ experimenter to create movie stimuli or instructions.
 """
 
 # Part of the PsychoPy library
-# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2022 Open Science Tools Ltd.
+# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2025 Open Science Tools Ltd.
 # Distributed under the terms of the GNU General Public License (GPL).
 
 __all__ = [
@@ -840,6 +840,7 @@ class CameraInterfaceFFmpeg(CameraInterface):
                   self._warmupBarrier,
                   self._recordBarrier,
                   self._mic))
+        self._playerThread.daemon=True
         self._playerThread.start()
 
         self._warmupBarrier.wait()
@@ -1281,6 +1282,7 @@ class CameraInterfaceOpenCV(CameraInterface):
                   self._warmUpBarrier,
                   self._recordBarrier,
                   self._mic))
+        self._playerThread.daemon=True
         self._playerThread.start()
 
         self._warmUpBarrier.wait()  # wait until the camera is ready
@@ -1693,7 +1695,7 @@ class Camera:
                     self._device = device
                 else:
                     raise TypeError(
-                        "Incorrect type for `camera`, expected `int` or `str`.")
+                        f"Incorrect type for `camera`, expected `int` or `str` but received {repr(device)}")
 
             # get the camera information
             if self._device in _formatMapping:
@@ -1701,7 +1703,7 @@ class Camera:
             else:
                 # raise error if couldn't find matching camera info
                 raise CameraFormatNotSupportedError(
-                    'Specified camera format is not supported.')
+                    f'Specified camera format {repr(self._device)} is not supported.')
 
         # # operating mode
         # if mode not in (CAMERA_MODE_VIDEO, CAMERA_MODE_CV, CAMERA_MODE_PHOTO):
@@ -1723,7 +1725,7 @@ class Camera:
 
         # current camera frame since the start of recording
         self._player = None  # media player instance
-        self._status = NOT_STARTED
+        self.status = NOT_STARTED
         self._isRecording = False
         self._bufferSecs = float(bufferSecs)
         self._lastFrame = None  # use None to avoid imports for ImageStim
@@ -1942,20 +1944,6 @@ class Camera:
         return getCameraDescriptions(collapse=collapse)
 
     @property
-    def status(self):
-        """Status flag for the camera (`int`).
-
-        Can be either `RECORDING`, `STOPPED`, `STOPPING`, or `NOT_STARTED`. This 
-        property used in Builder output scripts and does not update on its own.
-
-        """
-        return self._status
-
-    @status.setter
-    def status(self, value):
-        self._status = value
-
-    @property
     def device(self):
         """Camera to use (`str` or `None`).
 
@@ -2149,7 +2137,7 @@ class Camera:
     #     """
     #     pass
 
-    def record(self):
+    def record(self, clearLastRecording=True):
         """Start recording frames.
 
         This function will start recording frames and audio (if available). The
@@ -2164,7 +2152,16 @@ class Camera:
         Warnings
         --------
         If a recording has been previously made without calling `save()` it will
-        be discarded if `record()` is called again.
+        be discarded if `record()` is called again unless 
+        `clearLastRecording=False`.
+
+        Parameters
+        ----------
+        clearLastRecording : bool
+            Clear the frame buffer before starting the recording. If `True`,
+            the frame buffer will be cleared before starting the recording. If
+            `False`, the frame buffer will be kept and new frames will be added
+            to the buffer. Default is `True`.
 
         """
         if self.isNotStarted:
@@ -2174,6 +2171,10 @@ class Camera:
                 "opening now. This is not recommended as it may incur a longer "
                 "than expected delay in the recording start time."
             )
+
+        # clear previous frames
+        if clearLastRecording:
+            self._captureFrames.clear()
         
         self._audioTrack = None
         self._lastFrame = None
@@ -2194,6 +2195,9 @@ class Camera:
     def stop(self):
         """Stop recording frames and audio (if available).
         """
+        if self._captureThread is None:  # do nothing if not open
+            return
+
         if not self._captureThread.isOpen():
             raise RuntimeError("Cannot stop recording, stream is not open.")
 
@@ -2215,6 +2219,9 @@ class Camera:
         to save the frames to disk.
 
         """
+        if self._captureThread is None:  # nop
+            return
+
         if not self._captureThread.isOpen():
             raise RuntimeError("Cannot close stream, stream is not open.")
         

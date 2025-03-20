@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 # Part of the PsychoPy library
-# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2022 Open Science Tools Ltd.
+# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2025 Open Science Tools Ltd.
 # Distributed under the terms of the GNU General Public License (GPL).
 
 """Describes the Flow of an experiment
@@ -14,6 +14,7 @@ from psychopy.experiment import getAllStandaloneRoutines
 from psychopy.experiment.routines._base import Routine, BaseStandaloneRoutine
 from psychopy.experiment.loops import LoopTerminator, LoopInitiator
 from psychopy.tools import filetools as ft
+from psychopy.preferences import prefs
 
 
 class Flow(list):
@@ -40,7 +41,7 @@ class Flow(list):
         loopStack = [currentList]
         for thisEntry in self:
             if thisEntry.getType() == 'LoopInitiator':
-                currentList.append(thisEntry.loop) # this loop is child of current
+                currentList.append(thisEntry.loop)  # this loop is child of current
                 loopDict[thisEntry.loop] = []  # and is (current) empty list awaiting children
                 currentList = loopDict[thisEntry.loop]
                 loopStack.append(loopDict[thisEntry.loop])  # update the list of loops (for depth)
@@ -70,6 +71,20 @@ class Flow(list):
             element.append(sub)
 
         return element
+
+    def getUniqueEntries(self):
+        """
+        Get all entries on the flow, without duplicate entries.
+        """
+        # array to store entries in
+        entries = []
+        # iterate through all entries
+        for entry in self:
+            # append if not present
+            if entry not in entries:
+                entries.append(entry)
+
+        return entries
 
     def addLoop(self, loop, startPos, endPos):
         """Adds initiator and terminator objects for the loop
@@ -125,7 +140,6 @@ class Flow(list):
                 # right-click in GUI)
                 del self[id]
 
-
     def integrityCheck(self):
         """Check that the flow makes sense together and check each component"""
 
@@ -153,7 +167,7 @@ class Flow(list):
                     if not hasattr(field, 'label'):
                         continue  # no problem, no warning
                     if (field.label.lower() in ['text', 'customize'] or
-                            not field.valType in ('str', 'code')):
+                            field.valType not in ('str', 'code')):
                         continue
                     if (isinstance(field.val, str) and
                             field.val != field.val.strip()):
@@ -189,7 +203,7 @@ class Flow(list):
             # non-redundant, order unknown
             print('\n  '.join(list(set(warnings))))
 
-    def writePreCode(self,script):
+    def writePreCode(self, script):
         """Write the code that comes before the Window is created
         """
         script.writeIndentedLines("\n# Start Code - component code to be "
@@ -241,10 +255,27 @@ class Flow(list):
         script.writeIndentedLines(code)
         script.setIndentLevel(+1, relative=True)
 
+        # start rush mode
+        if self.exp.settings.params['rush']:
+            code = (
+                "# enter 'rush' mode (raise CPU priority)\n"
+            )
+            # put inside an if statement if rush can be overwritten by piloting
+            if prefs.piloting['forceNonRush']:
+                code += (
+                    "if not PILOTING:\n"
+                    "    "
+                )
+            code += (
+                "core.rush(enable=True)\n"
+            )
+            script.writeIndentedLines(code)
         # initialisation
         code = (
             "# mark experiment as started\n"
             "thisExp.status = STARTED\n"
+            "# make sure window is set to foreground to prevent losing focus\n"
+            "win.winHandle.activate()\n"
             "# make sure variables created by exec are available globally\n"
             "exec = environmenttools.setExecEnvironment(globals())\n"
             "# get device handles from dict of input devices\n"
@@ -312,7 +343,7 @@ class Flow(list):
                 "expInfo['expStart'] = data.getDateStr(\n"
                 "    format='%Y-%m-%d %Hh%M.%S.%f %z', fractionalSecondDigits=6\n"
                 ")\n"
-        )
+                )
         script.writeIndentedLines(code)
         # run-time code
         for entry in self:
@@ -332,6 +363,13 @@ class Flow(list):
             "endExperiment(thisExp, win=win)\n"
         )
         script.writeIndentedLines(code)
+        # end rush mode
+        if self.exp.settings.params['rush']:
+            code = (
+                "# end 'rush' mode\n"
+                "core.rush(enable=False)\n"
+            )
+            script.writeIndentedLines(code)
 
         # Exit function def
         script.setIndentLevel(-1, relative=True)
@@ -364,13 +402,14 @@ class Flow(list):
                 "\n"
                 "const flowScheduler = new Scheduler(psychoJS);\n"
                 "const dialogCancelScheduler = new Scheduler(psychoJS);\n"
-                "psychoJS.scheduleCondition(function() { return (psychoJS.gui.dialogComponent.button === 'OK'); }, flowScheduler, dialogCancelScheduler);\n"
+                "psychoJS.scheduleCondition(function() { return (psychoJS.gui.dialogComponent.button === 'OK'); },"
+                "flowScheduler, dialogCancelScheduler);\n"
                 "\n")
         script.writeIndentedLines(code)
 
         code = ("// flowScheduler gets run if the participants presses OK\n"
-               "flowScheduler.add(updateInfo); // add timeStamp\n"
-               "flowScheduler.add(experimentInit);\n")
+                "flowScheduler.add(updateInfo); // add timeStamp\n"
+                "flowScheduler.add(experimentInit);\n")
         script.writeIndentedLines(code)
         loopStack = []
         for thisEntry in self:
@@ -395,11 +434,18 @@ class Flow(list):
                     loopStack.remove(thisEntry.loop)
             script.writeIndentedLines(code)
         # quit when all routines are finished
-        script.writeIndented("flowScheduler.add(quitPsychoJS, %(End Message)s, true);\n" % self.exp.settings.params)
+        code = (
+            "flowScheduler.add(quitPsychoJS, %(End Message)s, true);\n"
+        )
+        script.writeIndentedLines(code % self.exp.settings.params)
         # handled all the flow entries
-        code = ("\n// quit if user presses Cancel in dialog box:\n"
-                "dialogCancelScheduler.add(quitPsychoJS, '', false);\n\n")
-        script.writeIndentedLines(code)
+        code = (
+            "\n"
+            "// quit if user presses Cancel in dialog box:\n"
+            "dialogCancelScheduler.add(quitPsychoJS, %(End Message)s, false);\n"
+            "\n"
+        )
+        script.writeIndentedLines(code % self.exp.settings.params)
 
         # Write resource list
         resourceFiles = []
@@ -410,7 +456,7 @@ class Flow(list):
                     name = resource.split('/')[-1]
                 elif 'surveyId' in resource:
                     name = 'surveyId'
-                elif 'name' in resource and resource['name'] in list(ft.defaultStim):
+                elif 'name' in resource:
                     name = resource['name']
                 elif 'rel' in resource:
                     name = resource['rel']

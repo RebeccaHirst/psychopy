@@ -1,3 +1,4 @@
+import threading
 from psychopy import liaison, session, hardware
 from psychopy.hardware import DeviceManager
 from psychopy.tests import utils, skip_under_vm
@@ -33,6 +34,7 @@ def runInLiaison(server, protocol, obj, method, *args):
     asyncio.run(
         server._processMessage(protocol, json.dumps(cmd))
     )
+
 
 @skip_under_vm
 class TestLiaison:
@@ -87,6 +89,52 @@ class TestLiaison:
             self.server, self.protocol, "session", "runExperiment",
             "exp1"
         )
+    
+    def test_future_trials(self):
+        # add experiment
+        runInLiaison(
+            self.server, self.protocol, "session", "addExperiment",
+            "testFutureTrials/testFutureTrials.psyexp", "testFutureTrials"
+        )
+        time.sleep(1)
+        # define a threaded task to run alongside experiment
+        def _thread():
+            # wait for first meaningful result
+            resp = None
+            i = 0
+            while resp is None and i < 24:
+                # get future trial
+                runInLiaison(
+                    self.server, self.protocol, "session", "getFutureTrial",
+                    "1", "True"
+                )
+                # get result
+                resp = json.loads(self.protocol.messages[-1]["result"])
+                # wait 0.1s
+                time.sleep(0.1)
+                # iterate towards limit
+                i += 1
+            # if we hit iteration limit, fail
+            assert i < 24, "Timed out waiting for a non-None result from getFutureTrial"
+            # does response have all the keys we expect?
+            expectedKeys = (
+                "type", "thisN", "thisRepN", "thisTrialN", "thisIndex", "data"
+            )
+            keysPresent = [key in resp for key in expectedKeys]
+            assert all(keysPresent), "Trial object missing key(s): {}".format(
+                expectedKeys[i] for i, val in enumerate(keysPresent) if not val
+            )
+            # resp should have type "trial_data"
+            assert resp['type'] == "trial_data", (
+                f"First non-None result from getFutureTrial doesn't look like a Trial object: {resp}"
+            )
+        # start thread
+        threading.Thread(target=_thread).start()
+        # run experiment
+        runInLiaison(
+            self.server, self.protocol, "session", "runExperiment",
+            "testFutureTrials"
+        )
 
     def test_experiment_error(self):
         """
@@ -138,6 +186,23 @@ class TestLiaison:
         assert lastMsg['data']['t'] == 1234
         assert lastMsg['data']['value'] == "a"
 
+    def test_actualize_session_win(self):
+        """
+        Test that attribute strings (e.g. "session.win") are actualized by Liaison to be the
+        object they represent.
+        """
+        # add screen buffer lightsensor
+        runInLiaison(
+            self.server, self.protocol, "DeviceManager", "addDevice",
+            "psychopy.hardware.lightsensor.ScreenBufferSampler", "screenBuffer",
+            "session.win"
+        )
+        # get screen buffer photodidoe
+        device = DeviceManager.getDevice("screenBuffer")
+        # make sure its window is a window object
+        from psychopy.visual import Window
+        assert isinstance(device.win, Window)
+
     def test_device_by_name(self):
         """
         Test that adding a device by name to the device manager prior to running means Components
@@ -173,6 +238,8 @@ class TestLiaison:
     def test_device_JSON(self):
         cases = {
             'testMic': "psychopy.hardware.microphone.MicrophoneDevice",
+            'testPhotodiode': "psychopy.hardware.lightsensor.ScreenBufferSampler",
+            'testButtonBox': "psychopy.hardware.button.KeyboardButtonBox"
         }
         for deviceName, deviceClass in cases.items():
             # get the first available device
@@ -193,3 +260,16 @@ class TestLiaison:
             result = self.protocol.messages[-1]['result']
             # whatever is returned should be json serializable, load it to confirm that it is
             json.loads(result)
+
+    def test_device_error(self):
+        # add a device in a way which will trigger an error
+        runInLiaison(
+            self.server, self.protocol, "DeviceManager", "addDevice",
+            "psychopy.hardware.keyboard.KeyboardDevice", "testWrongKeyboard",
+            "-1", "wrong", "wrong", "wrong",
+        )
+        time.sleep(1)
+        # make sure error looks correct in JSON format
+        result = self.protocol.messages[-1]
+        assert result['type'] == "hardware_error"
+        assert "psychopy.hardware.exceptions.ManagedDeviceError" in result['msg']

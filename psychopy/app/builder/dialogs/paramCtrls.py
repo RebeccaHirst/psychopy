@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 # Part of the PsychoPy library
-# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2022 Open Science Tools Ltd.
+# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2025 Open Science Tools Ltd.
 # Distributed under the terms of the GNU General Public License (GPL).
 import ast
 import os
@@ -57,7 +57,7 @@ class _ValidatorMixin:
             return
 
         if valid:
-            self.SetForegroundColour(wx.Colour(0, 0, 0))
+            self.SetForegroundColour(wx.SystemSettings.GetColour(wx.SYS_COLOUR_BTNTEXT))
         else:
             self.SetForegroundColour(wx.Colour(1, 0, 0))
 
@@ -331,12 +331,12 @@ BoolCtrl = wx.CheckBox
 class ChoiceCtrl(wx.Choice, _ValidatorMixin, _HideMixin):
     def __init__(self, parent, valType,
                  val="", choices=[], labels=[], fieldName="",
-                 size=wx.Size(-1, 24)):
+                 size=wx.Size(-1, -1)):
         self._choices = choices
         self._labels = labels
         # Create choice ctrl from labels
         wx.Choice.__init__(self)
-        self.Create(parent, -1, size=size, name=fieldName)
+        self.Create(parent, -1, name=fieldName)
         self.populate()
         self.valType = valType
         self.SetStringSelection(val)
@@ -362,9 +362,9 @@ class ChoiceCtrl(wx.Choice, _ValidatorMixin, _HideMixin):
         _labels = {}
         for i, value in enumerate(choices):
             if i < len(labels):
-                _labels[value] = labels[i]
+                _labels[value] = _translate(labels[i]) if labels[i] != '' else ''
             else:
-                _labels[value] = value
+                _labels[value] = _translate(value) if value != '' else ''
         labels = _labels
         # store labels and choices
         self.labels = labels
@@ -898,9 +898,13 @@ class SurveyCtrl(wx.TextCtrl, _ValidatorMixin, _HideMixin):
 
 
 class TableCtrl(wx.TextCtrl, _ValidatorMixin, _HideMixin, _FileMixin):
-    def __init__(self, parent, valType,
-                 val="", fieldName="",
+    def __init__(self, parent, param, fieldName="",
                  size=wx.Size(-1, 24)):
+        # get val and val type
+        val = param.val
+        valType = param.valType
+        # store param
+        self.param = param
         # Create self
         wx.TextCtrl.__init__(self)
         self.Create(parent, -1, val, name=fieldName, size=size)
@@ -920,19 +924,6 @@ class TableCtrl(wx.TextCtrl, _ValidatorMixin, _HideMixin, _FileMixin):
         self.xlBtn.SetToolTip(_translate("Open/create in your default table editor"))
         self.xlBtn.Bind(wx.EVT_BUTTON, self.openExcel)
         self._szr.Add(self.xlBtn)
-        # Link to Excel templates for certain contexts
-        cmpRoot = Path(experiment.components.__file__).parent
-        expRoot = Path(cmpRoot).parent
-        self.templates = {
-            'Form': Path(cmpRoot) / "form" / "formItems.xltx",
-            'CounterBalance': Path(expRoot) / "routines" / "counterbalance" / "counterbalanceItems.xltx",
-            'TrialHandler': Path(expRoot) / "loopTemplate.xltx",
-            'StairHandler': Path(expRoot) / "loopTemplate.xltx",
-            'MultiStairHandler:simple': Path(expRoot) / "staircaseTemplate.xltx",
-            'MultiStairHandler:QUEST': Path(expRoot) / "questTemplate.xltx",
-            'MultiStairHandler:QUESTPLUS': Path() / "questPlugTemplate.xltx",
-            'None': Path(expRoot) / 'blankTemplate.xltx',
-        }
         # Specify valid extensions
         self.validExt = [".csv",".tsv",".txt",
                          ".xl",".xlsx",".xlsm",".xlsb",".xlam",".xltx",".xltm",".xls",".xlt",
@@ -950,26 +941,15 @@ class TableCtrl(wx.TextCtrl, _ValidatorMixin, _HideMixin, _FileMixin):
     def validate(self, evt=None):
         """Redirect validate calls to global validate method, assigning appropriate valType"""
         validate(self, "file")
-        # Disable Excel button if value is from a variable
-        if "$" in self.GetValue():
-            self.xlBtn.Disable()
-            return
-        # enable Excel button if valid
-        self.xlBtn.Enable(self.valid)
-        # get frame
-        frame = self.GetParent()
-        while hasattr(frame, "GetParent") and not (hasattr(frame, "routine") or hasattr(frame, "component")):
-            frame = frame.GetParent()
-        # get comp type from frame
-        if hasattr(frame, "component"):
-            thisType = frame.component.type
-        elif hasattr(frame, "routine"):
-            thisType = frame.routine.type
+        # if field is blank, enable/diable according to whether there's a template
+        if not self.GetValue().strip():
+            self.xlBtn.Enable("template" in self.param.ctrlParams)
+        # otherwise, enable/disable according to validity
         else:
-            thisType = None
-        # does this component have a default template?
-        if thisType in self.templates:
-            self.xlBtn.Enable(True)
+            self.xlBtn.Enable(self.valid)
+            # if value isn't known until runtime, always disable Excel button
+            if "$" in self.GetValue():
+                self.xlBtn.Disable()
 
     def openExcel(self, event):
         """Either open the specified excel sheet, or make a new one from a template"""
@@ -980,22 +960,17 @@ class TableCtrl(wx.TextCtrl, _ValidatorMixin, _HideMixin, _FileMixin):
                 "please remember to add it to {name}").format(name=_translate(self.Name)),
                              caption=_translate("Reminder"))
             dlg.ShowModal()
-            # get frame
-            frame = self.GetParent()
-            while hasattr(frame, "GetParent") and not (hasattr(frame, "routine") or hasattr(frame, "component")):
-                frame = frame.GetParent()
-            # get comp type from frame
-            if hasattr(frame, "component"):
-                thisType = frame.component.type
-            elif hasattr(frame, "routine"):
-                thisType = frame.routine.type
+            # get template
+            if "template" in self.param.ctrlParams:
+                file = self.param.ctrlParams['template']
+                # if template is specified as a method, call it now to get the value live
+                if callable(file):
+                    file = file()
+                # convert to Path
+                file = Path(file)
             else:
-                thisType = "None"
-            # open type specific template, or blank
-            if thisType in self.templates:
-                file = self.templates[thisType]
-            else:
-                file = self.templates['None']
+                # use blank template if none given
+                file = Path(experiment.__file__).parent / 'blankTemplate.xltx',
         # Open whatever file is used
         try:
             os.startfile(file)
@@ -1007,7 +982,7 @@ class TableCtrl(wx.TextCtrl, _ValidatorMixin, _HideMixin, _FileMixin):
         _wld = f"All Table Files({'*'+';*'.join(self.validExt)})|{'*'+';*'.join(self.validExt)}|All Files (*.*)|*.*"
         file = self.getFile(msg="Specify table file ...", wildcard=_wld)
         if file:
-            self.SetValue(file)
+            FileCtrl.setFile(self, file)
             self.validate(event)
 
 
@@ -1205,3 +1180,44 @@ class DictCtrl(ListWidget, _ValidatorMixin, _HideMixin):
         Hide all items in the dict ctrl
         """
         self.Show(False)
+
+
+class FontCtrl(SingleLineCtrl):
+    def onOK(self):
+        # get a font manager
+        from psychopy.tools.fontmanager import FontManager, MissingFontError
+        fm = FontManager()
+        # check whether the font is installed
+        installed = fm.getFontsMatching(self.GetValue(), fallback=False)
+        # if not installed, ask the user whether to download from Google Fonts
+        if not installed:
+            # create dialog
+            dlg = wx.MessageDialog(
+                self.GetTopLevelParent(),
+                _translate(
+                    "Font {} is not installed, would you like to download it from Google Fonts?"
+                ).format(self.GetValue()),
+                style=wx.YES|wx.NO|wx.ICON_QUESTION
+            )
+            # download if yes
+            if dlg.ShowModal() == wx.ID_YES:
+                try:
+                    fm.addGoogleFont(self.GetValue().strip())
+                except MissingFontError as err:
+                    dlg = wx.MessageDialog(
+                        self.GetTopLevelParent(),
+                        _translate(
+                            "Could not download font {} from Google Fonts, reason: {}"
+                        ).format(self.GetValue(), err),
+                        style=wx.OK|wx.ICON_ERROR
+                    )
+                    dlg.ShowModal()
+                else:
+                    dlg = wx.MessageDialog(
+                        self.GetTopLevelParent(),
+                        _translate(
+                            "Font download successfully"
+                        ),
+                        style=wx.OK|wx.ICON_INFORMATION
+                    )
+                    dlg.ShowModal()

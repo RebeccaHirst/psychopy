@@ -1,3 +1,6 @@
+from psychopy import logging
+
+
 class PluginDevicesMixin:
     """
     Mixin for Components and Routines which adds behaviour to get parameters and values from
@@ -13,6 +16,12 @@ class PluginDevicesMixin:
         for backend in self.backends:
             # get params using backend's method
             params, order = backend.getParams(self)
+            # get reference to package
+            plugin = None
+            if hasattr(backend, "__module__") and backend.__module__:
+                pkg = backend.__module__.split(".")[0]
+                if pkg != "psychopy":
+                    plugin = pkg
             # add order
             self.order.extend(order)
             # add any params
@@ -23,6 +32,8 @@ class PluginDevicesMixin:
                     param.updates = self.params[key].updates
                 # add param
                 self.params[key] = param
+                # store plugin reference
+                self.params[key].plugin = plugin
 
             # add dependencies so that backend params are only shown for this backend
             for name in params:
@@ -70,6 +81,10 @@ class DeviceBackend:
     deviceClasses = []
 
     def __init_subclass__(cls):
+        logging.debug(
+            f"Registered backend for {cls.component.__name__}: {cls.label} ({cls.key}) from "
+            f"{cls.__module__}:{cls.__name__}"
+        )
         # add class to list of backends for ButtonBoxComponent
         cls.component.backends = cls.component.backends.copy()
         cls.component.backends.append(cls)
@@ -98,7 +113,7 @@ class DeviceBackend:
         """
         Add any required module/package imports for this backend
         """
-        raise NotImplementedError()
+        return
 
     def writeDeviceCode(self, buff):
         """

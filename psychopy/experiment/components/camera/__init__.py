@@ -8,31 +8,29 @@ from psychopy import logging
 from psychopy.experiment.components import (
     BaseComponent, BaseDeviceComponent, Param, _translate, getInitVals
 )
-from psychopy.sound.audiodevice import sampleRateQualityLevels
 from psychopy.tools import stringtools as st, systemtools as syst, audiotools as at
 
 
-_hasPTB = True
-try:
-    import psychtoolbox.audio as audio
-except (ImportError, ModuleNotFoundError):
-    logging.warning(
-        "The 'psychtoolbox' library cannot be loaded but is required for audio "
-        "capture (use `pip install psychtoolbox` to get it). Microphone "
-        "recording will be unavailable this session. Note that opening a "
-        "microphone stream will raise an error.")
-    _hasPTB = False
-# Get list of sample rates
-micSampleRates = {r[1]: r[0] for r in sampleRateQualityLevels.values()}
-
-
 class CameraComponent(BaseDeviceComponent):
+    """
+    This component provides a way to use the webcam to record participants during an experiment.
+
+    **Note: For online experiments, the browser will notify participants to allow use of webcam before the start of the task.**
+
+    When recording via webcam, specify the starting time relative to the start of the routine (see `start` below) and a stop time (= duration in seconds).
+    A blank duration evaluates to recording for 0.000s.
+
+    The resulting video files are saved in .mp4 format if recorded locally and saved in .webm if recorded online. There will be one file per recording. The files appear in a new folder within the data directory in a folder called data_cam_recorded. The file names include the unix (epoch) time of the onset of the recording with milliseconds, e.g., `recording_cam_2022-06-16_14h32.42.064.mp4`.
+
+    **Note: For online experiments, the recordings can only be downloaded from the "Download results" button from the study's Pavlovia page.**
+    """
+
     categories = ['Responses']
     targets = ["PsychoPy", "PsychoJS"]
     version = "2022.2.0"
     iconFile = Path(__file__).parent / 'webcam.png'
     tooltip = _translate('Webcam: Record video from a webcam.')
-    beta = True
+    beta = False
     deviceClasses = ["psychopy.hardware.camera.Camera"]
 
     def __init__(
@@ -357,11 +355,16 @@ class CameraComponent(BaseDeviceComponent):
             hint=msg,
             label=_translate("Channels"))
 
+        def getSampleRates():
+            return [r[0] for r in at.sampleRateQualityLevels.values()]
+        def getSampleRateLabels():
+            return [r[1] for r in at.sampleRateQualityLevels.values()]
         msg = _translate(
             "How many samples per second (Hz) to record at")
         self.params['micSampleRate'] = Param(
             sampleRate, valType='num', inputType="choice", categ='Audio',
-            allowedVals=list(micSampleRates),
+            allowedVals=getSampleRates,
+            allowedLabels=getSampleRateLabels,
             hint=msg, direct=False,
             label=_translate("Sample rate (hz)"))
 
@@ -404,8 +407,9 @@ class CameraComponent(BaseDeviceComponent):
         inits = getInitVals(self.params)
         self.setupMicNameInInits(inits)
         # --- setup mic ---
-        # substitute sample rate value for numeric equivalent
-        inits['micSampleRate'] = micSampleRates[inits['micSampleRate'].val]
+        # make sure mic sample rate is numeric
+        if inits['micSampleRate'].val in at.sampleRateLabels:
+            inits['micSampleRate'].val = at.sampleRateLabels[inits['micSampleRate'].val]
         # substitute channel value for numeric equivalent
         inits['micChannels'] = {'mono': 1, 'stereo': 2, 'auto': None}[self.params['micChannels'].val]
         # initialise mic device
@@ -427,7 +431,7 @@ class CameraComponent(BaseDeviceComponent):
         code = (
             "# initialise camera\n"
             "cam = deviceManager.addDevice(\n"
-            "    deviceClass='camera',\n"
+            "    deviceClass='psychopy.hardware.camera.Camera',\n"
             "    deviceName=%(deviceLabel)s,\n"
             "    cameraLib=%(cameraLib)s, \n"
             "    device=%(device)s, \n"
@@ -456,27 +460,19 @@ class CameraComponent(BaseDeviceComponent):
 
     def writeInitCode(self, buff):
         inits = getInitVals(self.params, "PsychoPy")
-        self.setupMicNameInInits(inits)
-        # substitute manual values if backend is opencv
-        if self.params['cameraLib'] == "opencv":
-            inits['device'] = inits['deviceManual']
-            inits['resolution'] = inits['resolutionManual']
-            inits['frameRate'] = inits['frameRateManual']
-        # Substitute sample rate value for numeric equivalent
-        inits['micSampleRate'] = micSampleRates[inits['micSampleRate'].val]
-        # Substitute channel value for numeric equivalent
-        inits['micChannels'] = {'mono': 1, 'stereo': 2, 'auto': None}[
-            self.params['micChannels'].val]
 
         # Create Microphone object
         code = (
-            "# create a camera object\n"
-            "%(name)s = camera.Camera(\n"
-            "    device=%(deviceLabel)s, \n"
-            "    mic=%(micDeviceLabel)s, \n"
-            ")\n"
+            "# get camera object\n"
+            "%(name)s = deviceManager.getDevice(%(deviceLabel)s)\n"
         )
         buff.writeIndentedLines(code % inits)
+        if self.params['saveFile']:
+            code = (
+                "# connect camera save method to experiment handler so it's called when data saves\n"
+                "thisExp.connectSaveMethod(%(name)s.save, os.path.join(%(name)sRecFolder, '_recovered.mp4'), encoderLib='ffpyplayer')\n"
+            )
+            buff.writeIndentedLines(code % inits)
 
     def writeInitCodeJS(self, buff):
         inits = getInitVals(self.params, target="PsychoJS")
@@ -522,28 +518,30 @@ class CameraComponent(BaseDeviceComponent):
 
     def writeFrameCodeJS(self, buff):
         # Start webcam at component start
-        self.writeStartTestCodeJS(buff)
-        code = (
-            "await %(name)s.record()\n"
-        )
-        buff.writeIndentedLines(code % self.params)
-        buff.setIndentLevel(-1, relative=True)
-        code = (
-            "};\n"
-        )
-        buff.writeIndentedLines(code)
+        indent = self.writeStartTestCodeJS(buff)
+        if indent:
+            code = (
+                "await %(name)s.record()\n"
+            )
+            buff.writeIndentedLines(code % self.params)
+            buff.setIndentLevel(-indent, relative=True)
+            code = (
+                "};\n"
+            )
+            buff.writeIndentedLines(code)
 
         # Stop webcam at component stop
-        self.writeStopTestCodeJS(buff)
-        code = (
-            "await %(name)s.stop()\n"
-        )
-        buff.writeIndentedLines(code % self.params)
-        buff.setIndentLevel(-1, relative=True)
-        code = (
-            "};\n"
-        )
-        buff.writeIndentedLines(code)
+        indent = self.writeStopTestCodeJS(buff)
+        if indent:
+            code = (
+                "await %(name)s.stop()\n"
+            )
+            buff.writeIndentedLines(code % self.params)
+            buff.setIndentLevel(-indent, relative=True)
+            code = (
+                "};\n"
+            )
+            buff.writeIndentedLines(code)
 
     def writeRoutineEndCode(self, buff):
         code = (

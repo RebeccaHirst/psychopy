@@ -1,19 +1,18 @@
 import webbrowser
 
 import wx
+import os
 import sys
 import subprocess as sp
-from pypi_search import search as pypi
-from packaging.version import parse as parseVersion
 
 from psychopy.app import utils
 from psychopy.app.themes import handlers, icons
 from psychopy.localization import _translate
-
 from psychopy.tools.pkgtools import (
     getInstalledPackages, getPackageMetadata, getPypiInfo, isInstalled,
     _isUserPackage, getInstallState
 )
+from psychopy.tools.versionchooser import parseVersionSafely
 
 
 class PackageManagerPanel(wx.Panel):
@@ -102,11 +101,15 @@ class PIPTerminalPanel(wx.Panel):
 
     def runCommand(self, cmd):
         """Run the command."""
+
+        env = os.environ.copy()
+
         emts = [self.preface, cmd]
         output = sp.Popen(' '.join(emts),
                           stdout=sp.PIPE,
                           stderr=sp.PIPE,
                           shell=True,
+                          env=env,
                           universal_newlines=True)
         stdout, stderr = output.communicate()
         sys.stdout.write(stdout)
@@ -161,7 +164,10 @@ class PackageListCtrl(wx.Panel):
         self.sizer.Add(self.orLbl, border=3, flag=wx.ALL | wx.ALIGN_CENTER)
         # Add by file...
         self.addFileBtn = wx.Button(self, label=_translate("Install from file"))
-        self.addFileBtn.SetToolTip(_translate("Install a package from a local file, such as a .egg or wheel."))
+        self.addFileBtn.SetToolTip(_translate(
+            "Install a package from a local file, such as a .egg or .whl. You can also point to a "
+            "pyproject.toml file to add an 'editable install' of an in-development package."
+        ))
         self.addFileBtn.Bind(wx.EVT_BUTTON, self.onAddFromFile)
         self.sizer.Add(self.addFileBtn, border=6, flag=wx.ALL | wx.ALIGN_CENTER)
         # Add button to open pip
@@ -270,25 +276,26 @@ class PackageListCtrl(wx.Panel):
         # Add column for latest version if we're actually searching
         self.ctrl.AppendColumn(_translate("Latest"))
         # Get packages from search
-        foundPackages = pypi.find_packages(self.searchCtrl.GetValue())
         # Populate
-        for pkg in foundPackages:
+        for pkg, version in installedPackages.items():
+            if pkg is None:
+                continue
             font = wx.Font()
-            if pkg['name'] in installedPackages:
+            if searchTerm in pkg:
                 # If installed, add row with value for installed version
-                item = self.ctrl.Append((pkg['name'], installedPackages[pkg['name']], pkg['version']))
+                item = self.ctrl.Append((pkg, version))
                 font = font.Bold()
-            else:
-                # Otherwise, add row with installed version blank
-                item = self.ctrl.Append((pkg['name'], "-", pkg['version']))
-            # Style new row according to install status
-            self.ctrl.SetItemFont(item, font)
+                # Style new row according to install status
+                self.ctrl.SetItemFont(item, font)
 
     def onAddFromFile(self, evt=None):
         # Create dialog to get package file location
         dlg = wx.FileDialog(
             self,
-            wildcard="Wheel files (*.whl)|*.whl|Source distribution files (*.sdist)|*.sdist|All files (*.*)|*.*",
+            wildcard="Wheel files (*.whl)|*.whl|"
+                     "Source distribution files (*.sdist)|*.sdist|"
+                     "Python project (pyproject.toml)|pyproject.toml|"
+                     "All files (*.*)|*.*",
             style=wx.FD_OPEN | wx.FD_SHOW_HIDDEN)
         if dlg.ShowModal() == wx.ID_OK:
             # Install
@@ -318,7 +325,7 @@ class PackageDetailsPanel(wx.Panel):
         self.sizer.Add(self.authorSzr, border=6, flag=wx.BOTTOM | wx.LEFT | wx.RIGHT | wx.EXPAND)
         self.authorPre = wx.StaticText(self, label=_translate("by "))
         self.authorSzr.Add(self.authorPre, border=0, flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL)
-        self.authorCtrl = utils.HyperLinkCtrl(self)
+        self.authorCtrl = wx.StaticText(self)
         self.authorSzr.Add(self.authorCtrl, border=0, flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL)
         self.licenseCtrl = wx.StaticText(self)
         self.authorSzr.Add(self.licenseCtrl, border=0, flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL)
@@ -393,16 +400,15 @@ class PackageDetailsPanel(wx.Panel):
             # Sort versions in descending order
             self.params['releases'] = sorted(
                 self.params['releases'],
-                key=lambda v: parseVersion(v),
+                key=lambda v: parseVersionSafely(v),
                 reverse=True
             )
 
         # Set values from params
-        self.nameCtrl.SetLabelText(self.params['name'])
-        self.authorCtrl.SetLabel(self.params['author'])
-        self.authorCtrl.URL = "mailto:" + self.params['authorEmail']
+        self.nameCtrl.SetLabel(self.params['name'] or "")
+        self.authorCtrl.SetLabel(self.params['author'] or "")
         self.authorCtrl.SetToolTip(self.params['authorEmail'])
-        self.licenseCtrl.SetLabelText(" (License: %(license)s)" % self.params)
+        self.licenseCtrl.SetLabel(" (License: %(license)s)" % self.params)
         self.descCtrl.setValue("%(summary)s\n\n%(desc)s" % self.params)
         # Set current and possible versions
         self.versionCtrl.Clear()

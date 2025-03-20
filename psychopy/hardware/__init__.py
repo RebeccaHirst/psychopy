@@ -5,9 +5,8 @@ import sys
 import glob
 from itertools import chain
 from psychopy import logging
-from . import eyetracker, listener
 from .manager import DeviceManager, deviceManager
-from .base import BaseDevice
+from .base import BaseDevice, BaseResponse, BaseResponseDevice
 
 try:
     from collections.abc import Iterable

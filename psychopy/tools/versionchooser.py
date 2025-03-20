@@ -2,23 +2,24 @@
 # -*- coding: utf-8 -*-
 
 # Part of the PsychoPy library
-# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2022 Open Science Tools Ltd.
+# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2025 Open Science Tools Ltd.
 # Distributed under the terms of the GNU General Public License (GPL).
 """PsychoPy Version Chooser to specify version within experiment scripts.
 """
 
 import os
 import sys
+import re
 import subprocess  # for git commandline invocation
 from collections import OrderedDict
 from subprocess import CalledProcessError
 import psychopy  # for currently loaded version
 from psychopy import prefs
 # the following will all have been imported so import here and reload later
-from psychopy import logging, tools, web, constants, preferences
-from pkg_resources import parse_version
-from importlib import reload
+from psychopy import logging, tools, web, constants, preferences, __version__
 from packaging.version import Version
+from importlib import reload
+from packaging.version import Version, InvalidVersion, VERSION_PATTERN
 
 USERDIR = prefs.paths['userPrefsDir']
 VER_SUBDIR = 'versions'
@@ -32,7 +33,7 @@ _remoteVersionsCache = []
 versionMap = OrderedDict({
     Version('2.7'): (Version("0.0"), Version("2020.2.0")),
     Version('3.6'): (Version("1.9"), Version("2022.1.0")),
-    Version('3.8'): (Version("2022.1.0"), Version("2024.1.0")),
+    Version('3.8'): (Version("2022.1.0"), None),
     Version('3.10'): (Version("2023.2.0"), None),
 })
 # fill out intermediate versions
@@ -40,6 +41,61 @@ for n in range(13):
     v = Version(f"3.{n}")
     av = max([key for key in versionMap if key <= v])
     versionMap[v] = versionMap[av]
+# parse current psychopy version
+psychopyVersion = Version(__version__)
+
+
+def parseVersionSafely(version, fallback=Version("0")):
+    """
+    Wrapper around packaging.version.parse which avoids raising an InvalidVersionError, making it
+    safer to use on potentially inconsistent version strings.
+
+    Checks for valid version string before parsing, then tries:
+    - With all but numbers, dots and keywords removed
+    - With all but numbers and dots removed
+    Finally, if the version number is still invalid, will return whatever is supplied as
+    `fallback` rather than raising an error.
+
+    Parameters
+    ----------
+    version : str
+        Version string to parse
+    fallback : Version
+        Value to return if version fails to parse
+
+    Returns
+    -------
+    Version
+        Parsed version string
+    """
+    # if version is already parsed, return unchanged
+    if isinstance(version, Version):
+        return Version
+    # if not a string, make into a string
+    if not isinstance(version, str):
+        version = str(version)
+    # if version is already valid, do normal parsing
+    if re.fullmatch(version, VERSION_PATTERN):
+        return Version(version)
+    # if dev number, use value up to it
+    version = version[:version.find("dev")]
+    # try stripping all but numbers, dots and keywords
+    version = "".join(
+        re.findall(r"\d|\.|a|b|c|rc|alpha|beta|pre|preview|post|rev|r|dev", version)
+    )
+    if re.fullmatch(version, VERSION_PATTERN):
+        return Version(version)
+    # try stripping all but numbers and dots
+    version = "".join(
+        re.findall(r"\d|\.", version)
+    )
+    if re.fullmatch(version, VERSION_PATTERN):
+        return Version(version)
+    # finally, try just in case and return fallback on fail
+    try:
+        return Version(version)
+    except InvalidVersion:
+        return fallback
 
 
 class VersionRange:
@@ -140,7 +196,7 @@ def getPsychoJSVersionStr(currentVersion, preferredVersion=''):
 
     # do we shorten minor versions ('3.4.2' to '3.4')?
     # only from 3.2 onwards
-    if (parse_version('3.2')) <= parse_version(useVerStr) < parse_version('2021') \
+    if (Version('3.2')) <= Version(useVerStr) < Version('2021') \
             and len(useVerStr.split('.')) > 2:
         # e.g. 2020.2 not 2021.2.5
         useVerStr = '.'.join(useVerStr.split('.')[:2])
@@ -148,7 +204,7 @@ def getPsychoJSVersionStr(currentVersion, preferredVersion=''):
         # e.g. 2021.1.0 not 2021.1.0.dev3
         useVerStr = '.'.join(useVerStr.split('.')[:3])
     # PsychoJS doesn't have additional rc1 or dev1 releases
-    for versionSuffix in ["rc", "dev", "a", "b"]:
+    for versionSuffix in ["rc", "dev", "post", "a", "b"]:
         if versionSuffix in useVerStr:
             useVerStr = useVerStr.split(versionSuffix)[0]
 
@@ -331,9 +387,9 @@ def versionOptions(local=True):
     majorMinor = sorted(
         list({'.'.join(v.split('.')[:2])
               for v in availableVersions(local=local)}),
-        key=parse_version, 
+        key=Version, 
         reverse=True)
-    major = sorted(list({v.split('.')[0] for v in majorMinor}), key=parse_version, reverse=True)
+    major = sorted(list({v.split('.')[0] for v in majorMinor}), key=Version, reverse=True)
     special = ['latest']
     return special + major + majorMinor
 
@@ -348,7 +404,7 @@ def _localVersions(forceCheck=False):
             tagInfo = subprocess.check_output(cmd.split(), cwd=VERSIONSDIR,
                                               env=constants.ENVIRON).decode('UTF-8')
             allTags = tagInfo.splitlines()
-            _localVersionsCache = sorted(allTags, key=parse_version, reverse=True)
+            _localVersionsCache = sorted(allTags, key=Version, reverse=True)
     return _localVersionsCache
 
 
@@ -367,7 +423,7 @@ def _remoteVersions(forceCheck=False):
                        for line in tagInfo.decode().splitlines()
                        if '^{}' not in line]
             # ensure most recent (i.e., highest) first
-            _remoteVersionsCache = sorted(allTags, key=parse_version, reverse=True)
+            _remoteVersionsCache = sorted(allTags, key=Version, reverse=True)
     return _remoteVersionsCache
 
 
@@ -389,19 +445,19 @@ def _versionFilter(versions, wxVersion):
     # logging.info(msg)
     versions = [ver for ver in versions
                 if ver == 'latest'
-                or parse_version(ver) >= parse_version('1.90')
+                or Version(ver) >= Version('1.90')
                 and len(ver) > 1]
 
     # Get WX Compatibility
     compatibleWX = '4.0'
-    if wxVersion is not None and parse_version(wxVersion) >= parse_version(compatibleWX):
+    if wxVersion is not None and Version(wxVersion) >= Version(compatibleWX):
         # msg = _translate("wx version: {}. Filtering versions of "
         #                  "PsychoPy only compatible with wx >= version {}".format(wxVersion,
         #                                                                       compatibleWX))
         # logging.info(msg)
         return [ver for ver in versions
                 if ver == 'latest'
-                or parse_version(ver) > parse_version('1.85.04')
+                or Version(ver) > Version('1.85.04')
                 and len(ver) > 1]
     return versions
 
@@ -420,7 +476,7 @@ def availableVersions(local=True, forceCheck=False):
             return sorted(
                 list(set([psychopy.__version__] + _localVersions(forceCheck) + _remoteVersions(
                     forceCheck))),
-                key=parse_version,
+                key=Version,
                 reverse=True)
     except subprocess.CalledProcessError:
         return []

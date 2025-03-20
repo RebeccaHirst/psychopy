@@ -3,7 +3,7 @@
 
 """
 Part of the PsychoPy library
-Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2022 Open Science Tools Ltd.
+Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2025 Open Science Tools Ltd.
 Distributed under the terms of the GNU General Public License (GPL).
 """
 
@@ -26,10 +26,18 @@ class StaticComponent(BaseComponent):
     tooltip = _translate('Static: Static screen period (e.g. an ISI). '
                          'Useful for pre-loading stimuli.')
 
-    def __init__(self, exp, parentName, name='ISI',
-                 startType='time (s)', startVal=0.0,
-                 stopType='duration (s)', stopVal=0.5,
-                 startEstim='', durationEstim=''):
+    def __init__(
+            self, exp, parentName, 
+            # basic
+            name='ISI',
+            startType='time (s)', startVal=0.0,
+            stopType='duration (s)', stopVal=0.5,
+            startEstim='', durationEstim='',
+            # custom
+            code="",
+            # data
+            saveData=False
+        ):
         BaseComponent.__init__(
             self, exp, parentName, name=name,
             startType=startType, startVal=startVal,
@@ -39,11 +47,26 @@ class StaticComponent(BaseComponent):
         self.updatesList = []  # a list of dicts {compParams, fieldName}
         self.type = 'Static'
         self.url = "https://www.psychopy.org/builder/components/static.html"
-        hnt = _translate(
-            "Custom code to be run during the static period (after updates)")
-        self.params['code'] = Param("", valType='code', inputType="multi", categ='Custom',
-                                    hint=hnt,
-                                    label=_translate("Custom code"))
+        # --- Custom params ---
+        self.order += [
+            "code",
+            "saveData",
+        ]
+        self.params['code'] = Param(
+            code, valType='code', inputType="multi", categ='Custom',
+            label=_translate("Custom code"),
+            hint=_translate(
+                "Custom code to be run during the static period (after updates)"
+            )
+        )
+        self.params['saveData'] = Param(
+            saveData, valType="code", inputType="bool", categ="Custom",
+            label=_translate("Save data during"),
+            hint=_translate(
+                "While the frame loop is paused, should we take the opportunity to save data now? "
+                "This is only relevant locally, online data saving is either periodic or on close."
+            )
+        )
 
     def addComponentUpdate(self, routine, compName, fieldName):
         self.updatesList.append({'compName': compName,
@@ -98,78 +121,92 @@ class StaticComponent(BaseComponent):
 
     def writeFrameCodeJS(self, buff):
         # Start test
-        self.writeStartTestCodeJS(buff)
-        buff.writeIndentedLines("%(name)s.status = PsychoJS.Status.STARTED;\n" % self.params)
-        self.writeParamUpdates(buff, target="PsychoJS")
-        buff.setIndentLevel(-1, relative=True)
-        buff.writeIndentedLines("}\n")
+        indent = self.writeStartTestCodeJS(buff)
+        if indent:
+            buff.writeIndentedLines("%(name)s.status = PsychoJS.Status.STARTED;\n" % self.params)
+            self.writeParamUpdates(buff, target="PsychoJS")
+            buff.setIndentLevel(-indent, relative=True)
+            buff.writeIndentedLines("}")
 
         # Stop test, with stop actions
-        self.writeStopTestCodeJS(buff)
-        for update in self.updatesList:
+        indent = self.writeStopTestCodeJS(buff)
+        if indent:
+            for update in self.updatesList:
 
-            # Get params for update
-            compName = update['compName']
-            fieldName = update['fieldName']
-            # routine = self.exp.routines[update['routine']]
-            if hasattr(compName, 'params'):
-                prms = compName.params  # it's already a compon so get params
-            else:
-                # it's a name so get compon and then get params
-                prms = self.exp.getComponentFromName(str(compName)).params
-            if prms[fieldName].valType == "file":
-                # Check resource manager status
-                code = (
-                    f"if (psychoJS.serverManager.getResourceStatus({prms[fieldName]}) === core.ServerManager.ResourceStatus.DOWNLOADED) {{\n"
-                )
-                buff.writeIndentedLines(code % self.params)
-                # Print confirmation
-                buff.setIndentLevel(+1, relative=True)
-                code = (
-                    "console.log('finished downloading resources specified by component %(name)s');\n"
-                )
-                buff.writeIndentedLines(code % self.params)
-                # else...
-                buff.setIndentLevel(-1, relative=True)
-                code = (
-                    "} else {\n"
-                )
-                buff.writeIndentedLines(code % self.params)
-                # Print warning if not downloaded
-                buff.setIndentLevel(+1, relative=True)
-                code = (
-                    f"console.log('resource specified in %(name)s took longer than expected to download');\n"
-                    f"await waitForResources(resources = {prms[fieldName]})"
-                )
-                buff.writeIndentedLines(code % self.params)
-                buff.setIndentLevel(-1, relative=True)
-                buff.writeIndentedLines("}\n")
-        buff.writeIndentedLines("%(name)s.status = PsychoJS.Status.FINISHED;\n" % self.params)
-        # Escape stop code indent
-        buff.setIndentLevel(-1, relative=True)
-        buff.writeIndentedLines("}\n")
+                # Get params for update
+                compName = update['compName']
+                fieldName = update['fieldName']
+                # routine = self.exp.routines[update['routine']]
+                if hasattr(compName, 'params'):
+                    prms = compName.params  # it's already a compon so get params
+                else:
+                    # it's a name so get compon and then get params
+                    prms = self.exp.getComponentFromName(str(compName)).params
+                if prms[fieldName].valType == "file":
+                    # Check resource manager status
+                    code = (
+                        f"if (psychoJS.serverManager.getResourceStatus({prms[fieldName]}) === core.ServerManager.ResourceStatus.DOWNLOADED) {{\n"
+                    )
+                    buff.writeIndentedLines(code % self.params)
+                    # Print confirmation
+                    buff.setIndentLevel(+1, relative=True)
+                    code = (
+                        "console.log('finished downloading resources specified by component %(name)s');\n"
+                    )
+                    buff.writeIndentedLines(code % self.params)
+                    # else...
+                    buff.setIndentLevel(-1, relative=True)
+                    code = (
+                        "} else {\n"
+                    )
+                    buff.writeIndentedLines(code % self.params)
+                    # Print warning if not downloaded
+                    buff.setIndentLevel(+1, relative=True)
+                    code = (
+                        f"console.log('resource specified in %(name)s took longer than expected to download');\n"
+                        f"await waitForResources(resources = {prms[fieldName]})"
+                    )
+                    buff.writeIndentedLines(code % self.params)
+                    buff.setIndentLevel(-1, relative=True)
+                    buff.writeIndentedLines("}\n")
+            buff.writeIndentedLines("%(name)s.status = PsychoJS.Status.FINISHED;\n" % self.params)
+            # Escape stop code indent
+            buff.setIndentLevel(-indent, relative=True)
+            buff.writeIndentedLines("}\n")
 
     def writeStartTestCode(self, buff):
         """This will be executed as the final component in the routine
         """
         buff.writeIndented("# *%s* period\n" % (self.params['name']))
         needsUnindent = BaseComponent.writeStartTestCode(self, buff)
-
-        if self.params['stopType'].val == 'time (s)':
-            durationSecsStr = "%(stopVal)s-t" % (self.params)
-        elif self.params['stopType'].val == 'duration (s)':
-            durationSecsStr = "%(stopVal)s" % (self.params)
-        elif self.params['stopType'].val == 'duration (frames)':
-            durationSecsStr = "%(stopVal)s*frameDur" % (self.params)
-        elif self.params['stopType'].val == 'frame N':
-            durationSecsStr = "(%(stopVal)s-frameN)*frameDur" % (self.params)
-        else:
-            msg = ("Couldn't deduce end point for startType=%(startType)s, "
-                   "stopType=%(stopType)s")
-            raise Exception(msg % self.params)
-        vals = (self.params['name'], durationSecsStr)
-        buff.writeIndented("%s.start(%s)\n" % vals)
-
+        if needsUnindent:
+            if self.params['stopType'].val == 'time (s)':
+                durationSecsStr = "%(stopVal)s-t" % (self.params)
+            elif self.params['stopType'].val == 'duration (s)':
+                durationSecsStr = "%(stopVal)s" % (self.params)
+            elif self.params['stopType'].val == 'duration (frames)':
+                durationSecsStr = "%(stopVal)s*frameDur" % (self.params)
+            elif self.params['stopType'].val == 'frame N':
+                durationSecsStr = "(%(stopVal)s-frameN)*frameDur" % (self.params)
+            else:
+                msg = ("Couldn't deduce end point for startType=%(startType)s, "
+                       "stopType=%(stopType)s")
+                raise Exception(msg % self.params)
+            # save data
+            if self.params['saveData']:
+                code = (
+                    "# take the opportunity to save data file now (to be updated later)\n"
+                    "_%(name)sLastFileNames = thisExp.save()\n"
+                    "thisExp.queueNextCollision('overwrite', fileName=_%(name)sLastFileNames)\n"
+                )
+                buff.writeIndentedLines(code % self.params)
+            # start static
+            code = (
+                "# start the static period\n"
+                "%(name)s.start({})\n"
+            ).format(durationSecsStr)
+            buff.writeIndentedLines(code % self.params)
+        
         return needsUnindent
 
     def writeStopTestCode(self, buff):
@@ -244,7 +281,7 @@ class StaticComponent(BaseComponent):
                                       paramName=fieldName,
                                       val=prms[fieldName],
                                       updateType=prms[fieldName].updates,
-                                      params=prms)
+                                      params=prms, target=target)
             # Comment to mark end of updates
             if target == "PsychoJS":
                 code = "// Component updates done\n"

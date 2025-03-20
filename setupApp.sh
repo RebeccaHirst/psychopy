@@ -40,15 +40,18 @@ for i in todo; do
     dmgName="../dist/Standalone${names[$i]}-$version-MacOS.dmg"
 
     ${pythons[$i]} setupApp.py py2app || { echo 'setupApp.py failed' ; exit 1; }
-    # copy over git-core folder
-    cp -R -L /usr/local/git/libexec/git-core dist/${names[$i]}.app/Contents/Resources/git-core
 
     # remove matplotlib tests (45mb)
-    rm -r dist/${names[$i]}.app/Contents/Resources/lib/python2.7/matplotlib/tests
+    pkg_site=$(ls -d1 dist/${names[$i]}.app/Contents/Resources/lib/python3.*)
+    rm -r ${pkg_site}/matplotlib/tests
     # strip all other architectures from binaries and move both to __fat copy
     mv dist/${names[$i]}.app dist/${names[$i]}__fat.app
     echo "stripping i386 using ditto"
     ditto --arch x86_64 dist/${names[$i]}__fat.app dist/${names[$i]}.app
+
+    # copy over contents of git-core folder (needs to be universal2 not stripped)
+    mkdir  dist/${names[$i]}.app/Contents/Resources/git-core
+    cp -R /Users/Shared/git-core  dist/${names[$i]}.app/Contents/Resources/git-core
 
     # built and stripped. Now mac codesign. Running in 2 steps to allow the detach step to work
     case $TEST_ONLY in
@@ -57,10 +60,10 @@ for i in todo; do
             ${pythons[$i]} building/apple_sign.py --app "${names[$i]}.app" --runPreDmgBuild 0    
             ;;
         1) 
-            ${pythons[$i]} building/apple_sign.py --app "${names[$i]}.app" --skipnotarize 1
+            ${pythons[$i]} building/apple_sign.py --app "${names[$i]}.app" --skipNotarize 1
             ;;
         2)
-            ${pythons[$i]} building/apple_sign.py --app "${names[$i]}.app" --runPostDmgBuild 0 --skipnotarize 1
+            ${pythons[$i]} building/apple_sign.py --app "${names[$i]}.app" --runPostDmgBuild 0 --skipNotarize 1
             ;;
     esac
 
@@ -77,8 +80,8 @@ for i in todo; do
     say -v kate "Finished building for ${pythons[$i]}"
 done
 
-osascript -e "set Volume 0.2"
-say -v Karen "all done"
-osascript -e "set Volume 3"
+# osascript -e "set Volume 0.2"
+# say -v Karen "all done"
+# osascript -e "set Volume 3"
 mv dist/*.dmg ../dist
 mv dist/*.app ../dist

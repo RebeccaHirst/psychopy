@@ -33,8 +33,9 @@ for i in todo; do
         dmgName="../dist/Standalone${names[$i]}-$version-MacOS.dmg"
 
         ${pythons[$i]} setupApp.py py2app || { echo 'setupApp.py failed' ; exit 1; }
-        # copy over git-core folder
-        cp -R -L /usr/local/git/libexec/git-core dist/${names[$i]}.app/Contents/Resources/git-core
+        # copy over contents of git-core folder
+        mkdir  dist/${names[$i]}.app/Contents/Resources/git-core
+        cp -R -L /usr/local/git/libexec/git-core/* dist/${names[$i]}.app/Contents/Resources/git-core
 
         # remove matplotlib tests (45mb)
         rm -r dist/${names[$i]}.app/Contents/Resources/lib/python3.10/matplotlib/tests
@@ -46,7 +47,7 @@ for i in todo; do
     if (( $SIGN==2  || $SIGN==3 )); then
         echo "signing"
         # built and stripped. Now mac codesign. Running in 2 steps to allow the detach step to work
-        ${pythons[$i]} building/apple_sign.py --app "${names[$i]}.app" --runPostDmgBuild 0 --id $CODESIGN_ID --pwd $CODESIGN_PASSWORD
-        ${pythons[$i]} building/apple_sign.py --app "${names[$i]}.app" --runPreDmgBuild 0  --id $CODESIGN_ID --pwd $CODESIGN_PASSWORD
+        ${pythons[$i]} building/apple_sign.py --app "${names[$i]}.app" --runPostDmgBuild 0 --appleId $CODESIGN_ID --pwd $CODESIGN_PASSWORD
+        ${pythons[$i]} building/apple_sign.py --app "${names[$i]}.app" --runPreDmgBuild 0  --appleId $CODESIGN_ID --pwd $CODESIGN_PASSWORD
     fi
 done

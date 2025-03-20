@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 # Part of the PsychoPy library
-# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2022 Open Science Tools Ltd.
+# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2025 Open Science Tools Ltd.
 # Distributed under the terms of the GNU General Public License (GPL).
 
 from os import path
@@ -15,7 +15,12 @@ from psychopy.experiment.py2js_transpiler import translatePythonToJavaScript
 
 class ButtonComponent(BaseVisualComponent):
     """
-    A component for presenting a clickable textbox with a programmable callback
+    This component allows you to show a static textbox which ends the routine and/or triggers
+    a "callback" (some custom code) when pressed. The nice thing about the button component is
+    that you can allow mouse/touch responses with a single component instead of needing 3 separate
+    components i.e. a textbox component (to display as a "clickable" thing), a mouse component
+    (to click the textbox) and a code component (not essential, but for example to check if a
+    clicked response was correct or incorrect).
     """
     categories = ['Responses']
     targets = ['PsychoPy', 'PsychoJS']
@@ -92,7 +97,7 @@ class ButtonComponent(BaseVisualComponent):
             hint=_translate("The text to be displayed"),
             label=_translate("Button text"))
         self.params['font'] = Param(
-            font, valType='str', inputType="single", allowedTypes=[], categ='Formatting',
+            font, valType='str', inputType="font", allowedTypes=[], categ='Formatting',
             updates='constant', allowedUpdates=_allow3[:],  # copy the list
             hint=_translate("The font name (e.g. Comic Sans)"),
             label=_translate("Font"))
@@ -173,7 +178,9 @@ class ButtonComponent(BaseVisualComponent):
                     "text=%(text)s, font=%(font)s,\n"
                     "pos=%(pos)s," + unitsStr + "\n"
                     "letterHeight=%(letterHeight)s,\n"
-                    "size=%(size)s, borderWidth=%(borderWidth)s,\n"
+                    "size=%(size)s, \n"
+                    "ori=%(ori)s\n,"
+                    "borderWidth=%(borderWidth)s,\n"
                     "fillColor=%(fillColor)s, borderColor=%(borderColor)s,\n"
                     "color=%(color)s, colorSpace=%(colorSpace)s,\n"
                     "opacity=%(opacity)s,\n"
@@ -197,25 +204,26 @@ class ButtonComponent(BaseVisualComponent):
 
         code = (
             "%(name)s = new visual.ButtonStim({\n"
-        )
-        buff.writeIndentedLines(code % inits)
-        buff.setIndentLevel(1, relative=True)
-        code = (
-                "win: psychoJS.window,\n"
-                "name: '%(name)s',\n"
-                "text: %(text)s,\n"
-                "fillColor: %(fillColor)s,\n"
-                "borderColor: %(borderColor)s,\n"
-                "color: %(color)s,\n"
-                "colorSpace: %(colorSpace)s,\n"
-                "pos: %(pos)s,\n"
-                "letterHeight: %(letterHeight)s,\n"
-                "size: %(size)s,\n"
-                "depth: %(depth)s\n"
-        )
-        buff.writeIndentedLines(code % inits)
-        buff.setIndentLevel(-1, relative=True)
-        code = (
+            "  win: psychoJS.window,\n"
+            "  name: '%(name)s',\n"
+            "  text: %(text)s,\n"
+            "  font: %(font)s,\n"
+            "  pos: %(pos)s,\n"
+            "  size: %(size)s,\n"
+            "  padding: %(padding)s,\n"
+            "  anchor: %(anchor)s,\n"
+            "  ori: %(ori)s,\n"
+            "  units: %(units)s,\n"
+            "  color: %(color)s,\n"
+            "  fillColor: %(fillColor)s,\n"
+            "  borderColor: %(borderColor)s,\n"
+            "  colorSpace: %(colorSpace)s,\n"
+            "  borderWidth: %(borderWidth)s,\n"
+            "  opacity: %(opacity)s,\n"
+            "  depth: %(depth)s,\n"
+            "  letterHeight: %(letterHeight)s,\n"
+            "  bold: %(bold)s,\n"
+            "  italic: %(italic)s,\n"
             "});\n"
             "%(name)s.clock = new util.Clock();\n\n"
         )
@@ -267,6 +275,7 @@ class ButtonComponent(BaseVisualComponent):
         indented = self.writeStartTestCode(buff)
         if indented:
             code = (
+                "win.callOnFlip(%(name)s.buttonClock.reset)\n"
                 "%(name)s.setAutoDraw(True)\n"
             )
             buff.writeIndentedLines(code % self.params)
@@ -341,7 +350,7 @@ class ButtonComponent(BaseVisualComponent):
         # Get callback from params
         callback = inits['callback']
         if inits['callback'].val not in [None, "None", "none", "undefined"]:
-            callback = translatePythonToJavaScript(str(callback))
+            callback = translatePythonToJavaScript(str(callback), namespace=None)
         else:
             callback = ""
 
@@ -365,7 +374,6 @@ class ButtonComponent(BaseVisualComponent):
         code = (
                         "// store time of first click\n"
                         "%(name)s.timesOn.push(%(name)s.clock.getTime());\n"
-                        "%(name)s.numClicks += 1;\n"
                         "// store time clicked until\n"
                         "%(name)s.timesOff.push(%(name)s.clock.getTime());\n"
         )
@@ -483,7 +491,3 @@ class ButtonComponent(BaseVisualComponent):
             "psychoJS.experiment.addData('%(name)s.timesOff', %(name)s.timesOff);\n"
         )
         buff.writeIndentedLines(code % self.params)
-
-    def integrityCheck(self):
-        super().integrityCheck()  # run parent class checks first
-        alerttools.testFont(self) # Test whether font is available locally

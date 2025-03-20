@@ -4,7 +4,7 @@
 """Platform specific extensions (using ctypes)"""
 
 # Part of the PsychoPy library
-# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2022 Open Science Tools Ltd.
+# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2025 Open Science Tools Ltd.
 # Distributed under the terms of the GNU General Public License (GPL).
 
 import sys
@@ -44,5 +44,3 @@ elif sys.platform == 'darwin':
     from .darwin import *  # pylint: disable=W0401
 elif sys.platform.startswith('linux'):  # normally 'linux2'
     from .linux import *  # pylint: disable=W0401
-elif sys.platform == 'posix':  # ever?!
-    from .posix import *  # pylint: disable=W0401

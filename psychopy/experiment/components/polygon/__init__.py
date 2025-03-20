@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 # Part of the PsychoPy library
-# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2022 Open Science Tools Ltd.
+# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2025 Open Science Tools Ltd.
 # Distributed under the terms of the GNU General Public License (GPL).
 
 from pathlib import Path
@@ -26,6 +26,7 @@ class PolygonComponent(BaseVisualComponent):
                  fillColor='white', fillColorSpace='rgb',
                  shape='triangle', nVertices=4, vertices="",
                  pos=(0, 0), size=(0.5, 0.5), ori=0,
+                 draggable=False,
                  startType='time (s)', startVal=0.0,
                  stopType='duration (s)', stopVal=1.0,
                  startEstim='', durationEstim=''):
@@ -90,14 +91,24 @@ class PolygonComponent(BaseVisualComponent):
             updates='constant',
             hint=_translate("Which point on the stimulus should be anchored to its exact position?"),
             label=_translate("Anchor"))
+        self.params['draggable'] = Param(
+            draggable, valType="code", inputType="bool", categ="Layout",
+            updates="constant",
+            label=_translate("Draggable?"),
+            hint=_translate(
+                "Should this stimulus be moveble by clicking and dragging?"
+            )
+        )
 
         msg = _translate("What shape is this? With 'regular polygon...' you "
                          "can set number of vertices and with 'custom "
                          "polygon...' you can set vertices")
         self.params['shape'] = Param(
             shape, valType='str', inputType="choice", categ='Basic',
-            allowedVals=["line", "triangle", "rectangle", "circle", "cross", "star", "arrow",
+            allowedVals=["line", "triangle", "rectangle", "circle", "cross", "star7", "arrow",
                          "regular polygon...", "custom polygon..."],
+            allowedLabels=["Line", "Triangle", "Rectangle", "Circle", "Cross", "Star", "Arrow",
+                           "Regular polygon...", "Custom polygon..."],
             hint=msg, direct=False,
             label=_translate("Shape"))
 
@@ -127,6 +138,14 @@ class PolygonComponent(BaseVisualComponent):
             "first value is used, for triangle and rect the [w,h] is as "
             "expected,\n but for higher-order polygons it represents the "
             "[w,h] of the ellipse that the polygon sits on!! ")
+        
+        self.depends.append({
+            'dependsOn': "shape",  # if...
+            'condition': "=='line'",  # is...
+            'param': "anchor",  # then...
+            'true': "hide",  # should...
+            'false': "show",  # otherwise...
+        })
 
         del self.params['color']
 
@@ -153,7 +172,7 @@ class PolygonComponent(BaseVisualComponent):
         if vertices in ['line', '2']:
             code = ("%s = visual.Line(\n" % inits['name'] +
                     "    win=win, name='%s',%s\n" % (inits['name'], unitsStr) +
-                    "    start=(-%(size)s[0]/2.0, 0), end=(+%(size)s[0]/2.0, 0),\n" % inits)
+                    "    size=%(size)s,\n" % inits)
         elif vertices in ['triangle', '3']:
             code = ("%s = visual.ShapeStim(\n" % inits['name'] +
                     "    win=win, name='%s',%s\n" % (inits['name'], unitsStr) +
@@ -166,7 +185,7 @@ class PolygonComponent(BaseVisualComponent):
             code = ("%s = visual.ShapeStim(\n" % inits['name'] +
                     "    win=win, name='%s',%s\n" % (inits['name'], unitsStr) +
                     "    size=%(size)s, vertices='circle',\n" % inits)
-        elif vertices in ['star']:
+        elif vertices in ['star', 'star7']:
             code = ("%s = visual.ShapeStim(\n" % inits['name'] +
                     "    win=win, name='%s', vertices='star7',%s\n" % (inits['name'], unitsStr) +
                     "    size=%(size)s,\n" % inits)
@@ -184,9 +203,9 @@ class PolygonComponent(BaseVisualComponent):
                     "    win=win, name='%s', vertices=%s,%s\n" % (inits['name'], vertices, unitsStr) +
                     "    size=%(size)s,\n" % inits)
 
-        code += ("    ori=%(ori)s, pos=%(pos)s, anchor=%(anchor)s,\n"
-                 "    lineWidth=%(lineWidth)s, "
-                 "    colorSpace=%(colorSpace)s,  lineColor=%(lineColor)s, fillColor=%(fillColor)s,\n"
+        code += ("    ori=%(ori)s, pos=%(pos)s, draggable=%(draggable)s, anchor=%(anchor)s,\n"
+                 "    lineWidth=%(lineWidth)s,\n"
+                 "    colorSpace=%(colorSpace)s, lineColor=%(lineColor)s, fillColor=%(fillColor)s,\n"
                  "    opacity=%(opacity)s, " % inits)
 
         depth = -self.getPosInRoutine()
@@ -274,15 +293,26 @@ class PolygonComponent(BaseVisualComponent):
         if self.params['interpolate'].val != 'linear':
             interpolate = 'false'
 
-        code += ("  ori: {ori}, pos: {pos},\n"
-                 "  anchor: {anchor},\n"
-                 "  lineWidth: {lineWidth}, \n"
-                 "  colorSpace: {colorSpace},\n"
-                 "  lineColor: new util.Color({lineColor}),\n"
-                 "  fillColor: new util.Color({fillColor}),\n"
-                 "  opacity: {opacity}, depth: {depth}, interpolate: {interpolate},\n"
-                 "}});\n\n")
-
+        # make a util.Color object for non-transparent
+        for key in ("fillColor", "lineColor"):
+            if inits[key].val != "undefined":
+                inits[key] = "new util.Color(%s)" % inits[key]
+        # add other params
+        code += (
+            "  ori: {ori}, \n"
+            "  pos: {pos}, \n"
+            "  draggable: {draggable}, \n"
+            "  anchor: {anchor}, \n"
+            "  lineWidth: {lineWidth}, \n"
+            "  lineColor: {lineColor}, \n"
+            "  fillColor: {fillColor}, \n"
+            "  colorSpace: {colorSpace}, \n"
+            "  opacity: {opacity}, \n"
+            "  depth: {depth}, \n"
+            "  interpolate: {interpolate}, \n"
+            "}});\n"
+            "\n"
+        )
         buff.writeIndentedLines(code.format(name=inits['name'],
                                             unitsStr=unitsStr,
                                             anchor=inits['anchor'],
@@ -297,5 +327,6 @@ class PolygonComponent(BaseVisualComponent):
                                             depth=depth,
                                             interpolate=interpolate,
                                             nVertices=inits['nVertices'],
-                                            vertices=inits['vertices']
+                                            vertices=inits['vertices'],
+                                            draggable=inits['draggable']
                                             ))

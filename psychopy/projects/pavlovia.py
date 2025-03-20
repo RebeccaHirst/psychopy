@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 # Part of the PsychoPy library
-# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2022 Open Science Tools Ltd.
+# Copyright (C) 2002-2018 Jonathan Peirce (C) 2019-2025 Open Science Tools Ltd.
 # Distributed under the terms of the GNU General Public License (GPL).
 
 """Helper functions in PsychoPy for interacting with Pavlovia.org
@@ -17,7 +17,7 @@ import subprocess
 import traceback
 
 import pandas
-from pkg_resources import parse_version
+from packaging.version import Version
 
 from psychopy import logging, prefs, exceptions
 from psychopy.tools.filetools import DictStorage, KnownProjects
@@ -33,6 +33,10 @@ try:
     haveGit = True
 except ImportError:
     haveGit = False
+# message to show when git is needed and not installed (format with action that failed)
+noGitMsg = _translate(
+    "Failed to {} as Pavlovia works via git, which is not installed on this machine. You can install git from here: https://git-scm.com/downloads"
+)
 
 import requests
 import gitlab
@@ -52,7 +56,9 @@ urlencode = parse.quote
 
 pavloviaPrefsDir = os.path.join(prefs.paths['userPrefsDir'], 'pavlovia')
 rootURL = "https://gitlab.pavlovia.org"
-client_id = '4bb79f0356a566cd7b49e3130c714d9140f1d3de4ff27c7583fb34fbfac604e0'
+client_id = '944b87ee0e6b4f510881d6f6bc082f64c7bba17d305efdb829e6e0e7ed466b34'
+code_challenge = None
+code_verifier = None
 scopes = []
 redirect_url = 'https://gitlab.pavlovia.org/'
 
@@ -78,11 +84,48 @@ OK = 1
 
 
 def getAuthURL():
+    # starting state
     state = str(uuid4())  # create a private "state" based on uuid
+    # code challenge and verifier need to be global so we can access them later
+    global code_challenge, code_verifier
+    # generate code challenge and corresponding verifier
+    code_verifier, code_challenge = generateCodeChallengePair()
+    # construct auth url
     auth_url = ('https://gitlab.pavlovia.org/oauth/authorize?client_id={}'
-                '&redirect_uri={}&response_type=token&state={}'
-                .format(client_id, redirect_url, state))
+                '&redirect_uri={}&response_type=code&state={}&code_challenge={}&code_challenge_method=S256'
+                .format(client_id, redirect_url, state, code_challenge))
+
     return auth_url, state
+
+
+def generateCodeChallengePair():
+    """
+    Create a unique random string and its corresponding encoded challenge.
+
+    Returns
+    -------
+    str
+        A code verifier - a random collection of characters
+    str
+        A code challenge - the code verifier transformed using a particular algorithm
+    """
+    from numpy.random import randint, choice as randchoice
+    import hashlib
+    import base64
+    # characters valid for a code verifier...
+    validChars = list("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
+    # first make the answer - pick random alphanumeric chars
+    code_verifier = ""
+    for n in range(randint(44, 127)):
+        code_verifier += randchoice(validChars)
+    # transform to make code_challenge
+    code_challenge = code_verifier
+    # SHA-256 digest
+    code_verifier_hash = hashlib.sha256(code_verifier.encode("utf-8")).digest()
+    # Base64 urlsafe encode without padding
+    code_challenge = base64.urlsafe_b64encode(code_verifier_hash).decode("utf-8").rstrip("=")
+    
+    return code_verifier, code_challenge
 
 
 def login(tokenOrUsername, rememberMe=True):
@@ -112,8 +155,11 @@ def login(tokenOrUsername, rememberMe=True):
         user = currentSession.user
         prefs.appData['projects']['pavloviaUser'] = user['username']
     # update Pavlovia button(s)
-    for btn in app._psychopyApp.pavloviaButtons['user'] + app._psychopyApp.pavloviaButtons['project']:
-        btn.updateInfo()
+    appInstance = app.getAppInstance()
+    if appInstance:
+        for btn in appInstance.pavloviaButtons['user'] + appInstance.pavloviaButtons['project']:
+            btn.updateInfo()
+
 
 def logout():
     """Log the current user out of pavlovia.
@@ -135,7 +181,7 @@ def logout():
         if hasattr(frame, 'setUser'):
             frame.setUser(None)
     # update Pavlovia button(s)
-    for btn in app._psychopyApp.pavloviaButtons['user'] + app._psychopyApp.pavloviaButtons['project']:
+    for btn in app.getAppInstance().pavloviaButtons['user'] + app.getAppInstance().pavloviaButtons['project']:
         btn.updateInfo()
 
 
@@ -416,6 +462,13 @@ class PavloviaSession:
     def startSession(self, token):
         """Start a gitlab session as best we can
         (if no token then start an empty session)"""
+        self.session = requests.Session()
+        if prefs.connections['proxy']:  # if we have a proxy then we'll need to use
+            # the requests session to set the proxy
+            self.session.proxies = {
+                'https': prefs.connections['proxy'],
+                'http': prefs.connections['proxy']
+            }
         if token:
             if len(token) < 64:
                 raise ValueError(
@@ -423,26 +476,30 @@ class PavloviaSession:
                         "than expected length ({} not 64) for gitlab token"
                             .format(repr(token), len(token)))
             # Setup gitlab session
-            if parse_version(gitlab.__version__) > parse_version("1.4"):
-                self.gitlab = gitlab.Gitlab(rootURL, oauth_token=token, timeout=10, per_page=100)
-            else:
-                self.gitlab = gitlab.Gitlab(rootURL, oauth_token=token, timeout=10)
-            self.gitlab.auth()
+            self.gitlab = gitlab.Gitlab(rootURL, oauth_token=token,
+                                        timeout=10, session=self.session,
+                                        per_page=100)
+            try:
+                self.gitlab.auth()
+            except gitlab.exceptions.GitlabParsingError as err:
+                raise ConnectionError(
+                    "Failed to authenticate with the gitlab.pavlovia.org server. "
+                    "Received a string that could not be parsed by the gitlab library. "
+                    "This may be caused by having an institutional proxy server but "
+                    "not setting the proxy setting in PsychoPy preferences. If that "
+                    "isn't the case for you, then please get in touch so we can work out "
+                    "what the cause was in your case! support@opensciencetools.org")
+            
             self.username = self.gitlab.user.username
             self.userID = self.gitlab.user.id  # populate when token property is set
             self.userFullName = self.gitlab.user.name
             self.authenticated = True
-            # Setup http session
-            self.session = requests.Session()
+            # add the token (although this is also in the gitlab object)
             self.session.headers = {'OauthToken': token}
         else:
-            # Setup gitlab session
-            if parse_version(gitlab.__version__) > parse_version("1.4"):
-                self.gitlab = gitlab.Gitlab(rootURL, timeout=10, per_page=100)
-            else:
-                self.gitlab = gitlab.Gitlab(rootURL, timeout=10)
-            # Setup http session
-            self.session = requests.Session()
+            self.gitlab = gitlab.Gitlab(rootURL,
+                                        timeout=10, session=self.session,
+                                        per_page=100)
 
     @property
     def user(self):
@@ -605,6 +662,10 @@ class PavloviaProject(dict):
         try:
             value = dict.__getitem__(self, key)
         except KeyError:
+            # if no project, return None
+            if self.project is None:
+                return None
+            # otherwise, get from attributes
             if key in self.project.attributes:
                 value = self.project.attributes[key]
             elif hasattr(self, "_info") and key in self._info:
@@ -843,23 +904,32 @@ class PavloviaProject(dict):
             dlg.ShowModal()
             return
         if self.project is not None:
-            # Reset local repo so it checks again (rather than erroring if it's been deleted without an app restart)
-            self._repo = None
             # Jot down start time
             t0 = time.time()
-            # If first commit, do initial push
-            if not bool(self.project.attributes['default_branch']):
+            # make repo if needed
+            if self.repo is None:
+                repo = self.newRepo(infoStream)
+                if repo is None:
+                    return 0
+            # If first commit (besides repo creation), do initial push
+            if len(self.project.commits.list()) < 2:
                 self.firstPush(infoStream=infoStream)
             # Pull and push
             self.pull(infoStream)
             self.push(infoStream)
             # Write updates
             t1 = time.time()
-            msg = ("Successful sync at: {}, took {:.3f}s"
-                   .format(time.strftime("%H:%M:%S", time.localtime()), t1 - t0))
+            msg = (
+                "Successful sync at: {}, took {:.3f}s. View synced project here:\n"
+                "{}\n".format(
+                    time.strftime("%H:%M:%S", time.localtime()),
+                    t1 - t0,
+                    "https://pavlovia.org/" + self['path_with_namespace']
+                )
+            )
             logging.info(msg)
             if infoStream:
-                infoStream.write(msg + "\n\n")
+                infoStream.write(msg + "\n")
                 time.sleep(0.5)
             # Refresh info
             self.refresh()
@@ -926,7 +996,7 @@ class PavloviaProject(dict):
             infoStream = getInfoStream()
 
         if infoStream:
-            infoStream.write("Pushing changes from remote...\n")
+            infoStream.write("Pushing changes to remote...\n")
         try:
             info = self.repo.git.push(self.remoteWithToken, 'master')
             if infoStream and len(info):
@@ -1027,6 +1097,8 @@ class PavloviaProject(dict):
                     bareRemote = True
                 else:
                     bareRemote = False
+
+        repo = None
         # if remote is new (or existed but is bare) then init and push
         if localFiles and bareRemote:  # existing folder
             repo = git.Repo.init(self.localRoot)
@@ -1038,10 +1110,37 @@ class PavloviaProject(dict):
             self.stageFiles(['.gitignore'])
             self.commit('Create repository (including .gitignore)')
             self._newRemote = False
+        elif localFiles:
+            # get project name
+            if "/" in self.stringId:
+                _, projectName = self.stringId.split("/", maxsplit=1)
+            else:
+                projectName = self.stringId
+            # remove extra / from project name
+            projectName = projectName.replace("/", "")
+            # ask user if they want to clone to a subfolder
+            msg = _translate(
+                    "Folder '{localRoot}' is not empty, use '{localRoot}/{projectName}' instead?"
+            )
+            dlg = wx.MessageDialog(
+                None,
+                msg.format(localRoot=self.localRoot, projectName=projectName),
+                style=wx.ICON_QUESTION | wx.YES_NO | wx.CANCEL)
+            resp = dlg.ShowModal()
+            if resp == wx.ID_YES:
+                # if yes, update local root
+                self.localRoot = pathlib.Path(self.localRoot) / projectName
+                # try again
+                self.newRepo(infoStream=infoStream)
+            elif resp == wx.ID_CANCEL:
+                # if they cancelled, stop
+                infoStream.write(
+                    "Clone cancelled by user.\n"
+                )
+                repo = None
         else:
             # no files locally so safe to try and clone from remote
             repo = self.cloneRepo(infoStream=infoStream)
-            # TODO: add the further case where there are remote AND local files!
 
         return repo
 
@@ -1051,6 +1150,14 @@ class PavloviaProject(dict):
             infoStream = getInfoStream()
         if infoStream:
             infoStream.write("Pushing to Pavlovia for the first time...\n")
+        # construct initial commit
+        self.stageFiles(infoStream=infoStream)
+        info = self.commit(
+            _translate("Push initial project files")
+        )
+        if infoStream and len(info):
+            infoStream.write("{}\n".format(info))
+        # push
         info = self.repo.git.push('-u', self.remoteWithToken, 'master')
         self.project.attributes['default_branch'] = 'master'
         if infoStream:
@@ -1107,12 +1214,19 @@ class PavloviaProject(dict):
         None
         """
         localConfig = self.repo.git.config(l=True, local=True)  # list local
-        if self.session.user['email'] in localConfig:
-            return  # we already have it set up so can return
         # set the local config
-        with self.repo.config_writer() as config:
+        config = self.repo.config_writer()
+        # set config values if the user hasn't set them already
+        # the -100 hack is because ConfigParser.get_value allows setting a default
+        # but doing try...except on its custom errors is annoying!
+        if config.get_value("user", "email", default=-100) == -100:
             config.set_value("user", "email", self.session.user['email'])
             config.set_value("user", "name", self.session.user['name'])
+        if config.get_value("pull", "rebase", default=-100) == -100:
+            config.set_value("pull", "rebase", False)
+        if config.get_value("http", "postBuffer", default=-100) == -100:
+            config.set_value("http", "postBuffer", 524288000)
+        config.release()  # saves the changes (not needed if using `with config_writer() as config`)
 
     def fork(self, to=None):
         # Sub in current user if none given
@@ -1131,6 +1245,11 @@ class PavloviaProject(dict):
     def getChanges(self):
         """Find all the not-yet-committed changes in the repository"""
         changeDict = {}
+        changeList = []
+        # if we don't have a repo object, there's no changes
+        if not hasattr(self, "_repo") or self._repo is None:
+            return changeDict, changeList
+        # get changes
         changeDict['untracked'] = self.repo.untracked_files
         changeDict['changed'] = []
         changeDict['deleted'] = []
@@ -1152,7 +1271,6 @@ class PavloviaProject(dict):
                 changeDict['changed'].append(this.b_path)
             else:
                 raise ValueError("Found an unexpected change_type '{}' in gitpython Diff".format(this.change_type))
-        changeList = []
         for categ in changeDict:
             changeList.extend(changeDict[categ])
         return changeDict, changeList
@@ -1200,10 +1318,12 @@ class PavloviaProject(dict):
 
     def commit(self, message):
         """Commits the staged changes"""
-        self.repo.git.commit('-m', message)
+        info = self.repo.git.commit('-m', message)
         time.sleep(0.1)
         # then get a new copy of the repo
         self.repo = git.Repo(self.localRoot)
+
+        return info
 
     def save(self):
         """Saves the metadata to gitlab.pavlovia.org"""
@@ -1287,8 +1407,10 @@ class PavloviaProject(dict):
 def getGitRoot(p):
     """Return None or the root path of the repository"""
     if not haveGit:
-        raise exceptions.DependencyError(
-                "gitpython and a git installation required for getGitRoot()")
+        logging.warn(
+            noGitMsg.format(_translate("get git root"))
+        )
+        return None
 
     p = pathlib.Path(p).absolute()
     if not p.is_dir():
@@ -1318,8 +1440,10 @@ def getNameWithNamespace(p):
     """
     # Work out cwd
     if not haveGit:
-        raise exceptions.DependencyError(
-                "gitpython and a git installation required for getGitRoot()")
+        logging.warn(
+            noGitMsg.format(_translate("get project name"))
+        )
+        return None
 
     p = pathlib.Path(p).absolute()
     if not p.is_dir():
@@ -1332,14 +1456,14 @@ def getNameWithNamespace(p):
                             universal_newlines=True)  # newlines forces stdout to unicode
     stdout, stderr = proc.communicate()
     # Find a gitlab url in the response
-    url = re.match("https:\/\/gitlab\.pavlovia\.org\/\w*\/\w*\.git", stdout)
+    url = re.match(r"https:\/\/gitlab\.pavlovia\.org\/\w*\/\w*\.git", stdout)
     if url:
         # Get contents of url from response
         url = url.string[url.pos:url.endpos]
         # Get namespace/name string from url
         path = url
-        path = re.sub("\.git[.\n]*", "", path)
-        path = re.sub("[.\n]*https:\/\/gitlab\.pavlovia\.org\/", "", path)
+        path = re.sub(r"\.git[.\n]*", "", path)
+        path = re.sub(r"[.\n]*https:\/\/gitlab\.pavlovia\.org\/", "", path)
         return path
     else:
         return None
@@ -1350,8 +1474,10 @@ def getProject(filename):
     """
     # Check that we have Git
     if not haveGit:
-        raise exceptions.DependencyError(
-                "gitpython and a git installation required for getProject()")
+        logging.warn(
+            noGitMsg.format(_translate("get Pavlovia project"))
+        )
+        return None
     # Get git root
     gitRoot = getGitRoot(filename)
     # Get name with namespace
@@ -1363,7 +1489,9 @@ def getProject(filename):
     # If already found, return
     if (knownProjects is not None) and (path in knownProjects) and ('idNumber' in knownProjects[path]):
         # Make sure we are logged in
-        nameSpace, projectName = path.split("/")
+        nameSpace, projectName = path.split("/", maxsplit=1)
+        # remove extra slashes from project name
+        projectName = projectName.replace("/", "")
         # Try to log in if not logged in
         if not session.user:
             if nameSpace in knownUsers:
@@ -1409,7 +1537,9 @@ def getProject(filename):
                     # Remove .git
                     namespaceName = namespaceName.replace(".git", "")
                     # Split to get namespace
-                    nameSpace, projectName = namespaceName.split('/')
+                    nameSpace, projectName = namespaceName.split("/", maxsplit=1)
+                    # remove extra slashes from project name
+                    projectName = projectName.replace("/", "")
                     # Get current session
                     pavSession = getCurrentSession()
                     # Try to log in if not logged in
