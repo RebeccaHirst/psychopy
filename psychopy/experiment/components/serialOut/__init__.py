@@ -230,24 +230,26 @@ class SerialOutComponent(BaseDeviceComponent):
         indented = self.writeStartTestCode(buff)
         if indented:
             # get data string to write
-            if params['startDataType'] == "num":
-                params['startDataStr'] = "bytes(chr(%(startDataNumeric)s), 'utf-8')" % params
+            if params['startDataType'] == "str":
+                params['startData'] = params['startDataStr']
+            elif params['startDataType'] == "num":
+                params['startData'] = "bytes(chr(%(startDataNumeric)s), 'utf-8')" % params
             elif params['startDataType'] == "binary":
-                params['startDataStr'] = "0b%(startDataBinary)s" % params
+                params['startData'] = "0b%(startDataBinary)s" % params
             elif params['startDataType'] == "char":
-                params['startDataStr'] = "b%(startDataChar)s" % params
+                params['startData'] = "b%(startDataChar)s" % params
             elif params['startDataType'] == "code":
-                params['startDataStr'] = params['startDataCode']
+                params['startData'] = params['startDataCode']
             else:
                 raise TypeError(f"Unknown data type {params['startDataType']}")
             # write code to send it (immediately or on refresh)
             if self.params['syncScreenRefresh']:
                 code = (
-                    "win.callOnFlip(%(name)s.sendMessage, %(startDataStr)s)\n"
+                    "win.callOnFlip(%(name)s.sendMessage, %(startData)s)\n"
                 )
             else:
                 code = (
-                    "%(name)s.sendMessage(%(startDataStr)s)\n"
+                    "%(name)s.sendMessage(%(startData)s)\n"
                 )
             buff.writeIndented(code % params)
             # update status
@@ -267,25 +269,27 @@ class SerialOutComponent(BaseDeviceComponent):
         # On component stop, send stop pulse
         indented = self.writeStopTestCode(buff)
         if indented:
-                        # get data string to write
-            if params['stopDataType'] == "num":
-                params['stopDataStr'] = "bytes(bytearray([%(stopDataNumeric)s]))" % params
+            # get data string to write
+            if params['stopDataType'] == "str":
+                params['stopData'] = params['stopDataStr']
+            elif params['stopDataType'] == "num":
+                params['stopData'] = "bytes(bytearray([%(stopDataNumeric)s]))" % params
             elif params['stopDataType'] == "binary":
-                params['stopDataStr'] = "0b%(stopDataBinary)s" % params
+                params['stopData'] = "0b%(stopDataBinary)s" % params
             elif params['stopDataType'] == "char":
-                params['stopDataStr'] = "b'%(stopDataChar)s'" % params
+                params['stopData'] = "b'%(stopDataChar)s'" % params
             elif params['stopDataType'] == "code":
-                params['stopDataStr'] = params['stopDataCode']
+                params['stopData'] = params['stopDataCode']
             else:
                 raise TypeError(f"Unknown data type {params['stopDataType']}")
             # write code to send it (immediately or on refresh)
             if self.params['syncScreenRefresh']:
                 code = (
-                    "win.callOnFlip(%(name)s.sendMessage, %(stopDataStr)s)\n"
+                    "win.callOnFlip(%(name)s.sendMessage, %(stopData)s)\n"
                 )
             else:
                 code = (
-                    "%(name)s.sendMessage(%(stopDataStr)s)\n"
+                    "%(name)s.sendMessage(%(stopData)s)\n"
                 )
             buff.writeIndented(code % params)
             # update status
