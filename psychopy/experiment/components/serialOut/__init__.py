@@ -100,22 +100,35 @@ class SerialOutComponent(BaseDeviceComponent):
             label=_translate("Timeout"))
         
         for prefix, label, titleLabel, default in (
-            ("start", _translate("start"), _translate("Start"), b"s"),
+            ("start", _translate("start"), _translate("Start"), b"r"),
             ("stop", _translate("stop"), _translate("Stop"), b"x"),
         ):
 
             self.params[prefix + 'DataType'] = Param(
-                "num", valType="str", inputType="choice", categ="Basic",
-                allowedVals=["num", "binary", "char", "code"],
+                "str", valType="str", inputType="choice", categ="Basic",
+                allowedVals=["str", "num", "binary", "char", "code"],
                 allowedLabels=[
-                    _translate("Numeric (0-255)"), _translate("Binary"), _translate("Character (Byte)"), 
-                    _translate("Code")
+                    _translate("String"), _translate("Numeric (0-255)"), 
+                    _translate("Binary"), _translate("Character (Byte)"), _translate("Code")
                 ],
                 hint=_translate(
                     "Type of data to be sent: A number, a binary sequence, a character byte, or custom code ($)"
                 ),
                 label=_translate("Start data type")
             )
+
+            self.params[prefix + 'DataStr'] = Param(
+                default.decode("utf-8"), valType="str", inputType="single", categ="Basic",
+                hint=_translate("Send a regular string (which will be converted to binary) on {}").format(label),
+                label=_translate("{} data (string)").format(titleLabel)
+            )
+            self.depends.append({
+                'dependsOn': prefix + "DataType",  # if...
+                'condition': "== 'str'",  # meets...
+                'param': prefix + "DataStr",  # then...
+                'true': "show",  # should...
+                'false': "hide",  # otherwise...
+            })
 
             self.params[prefix + 'DataNumeric'] = Param(
                 ord(default), valType="code", inputType="single", categ="Basic",
@@ -145,7 +158,7 @@ class SerialOutComponent(BaseDeviceComponent):
 
             self.params[prefix + 'DataChar'] = Param(
                 "\\x" + hex(ord(default))[2:], valType="str", inputType="single", categ="Basic",
-                hint=_translate("Send a character byte (e.g. /x76) on {}").format(label),
+                hint=_translate("Send a character byte (e.g. \\x73) on {}").format(label),
                 label=_translate("{} data (char)").format(titleLabel)
             )
             self.depends.append({
