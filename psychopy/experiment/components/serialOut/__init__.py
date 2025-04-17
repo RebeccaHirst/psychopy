@@ -269,7 +269,7 @@ class SerialOutComponent(BaseDeviceComponent):
         if indented:
                         # get data string to write
             if params['stopDataType'] == "num":
-                params['stopDataStr'] = "bytes(chr(%(stopDataNumeric)s), 'utf-8')" % params
+                params['stopDataStr'] = "bytes(bytearray([%(stopDataNumeric)s]))" % params
             elif params['stopDataType'] == "binary":
                 params['stopDataStr'] = "0b%(stopDataBinary)s" % params
             elif params['stopDataType'] == "char":
