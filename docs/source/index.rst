@@ -5,16 +5,26 @@
 
 .. grid:: 1 1 1 1
     :class-container: news-reel
-
-    .. grid-item-card:: :octicon:`info` News
-        :link: https://run.pavlovia.org/pavlovia/survey/?surveyId=171ed328-d5ea-4819-83dc-9ba00ef5683b
-
-        Want to contribute to PsychoPy/JS? Apply to attend our in person code sprint!
     
     .. grid-item-card:: :octicon:`info` News
-        :link: https://workshops.psychopy.org/
+        :link: https://opensciencetools.org/
 
-        Official PsychoPy workshops April 9th - 11th at the University of Nottingham, Register here.
+        Did you know PsychoPy is supported by our company, Open Science Tools? find out more here.
+
+    .. grid-item-card:: :octicon:`info` News
+        :link: https://www.psychologicalscience.org/conventions/2025-aps-annual-convention
+
+        Come say hi in Washington! We will have a booth at APS - May 22nd - 25th 2025
+
+    .. grid-item-card:: :octicon:`info` News
+        :link: https://arcasummerschool.dpss.psy.unipd.it/arcasummerschool/
+
+        PsychoPy is part of a Summer School in Padova! - June 30th - July 4th 2025
+
+    .. grid-item-card:: :octicon:`info` News
+        :link: https://www.escop2025.com/satellite-events
+
+        Two day PsychoPy satelite event at ESCOP, Sheffield - September 1st and 2nd 2025
     
     .. grid-item-card:: :octicon:`info` News
         :link: https://uk.sagepub.com/en-gb/eur/building-experiments-in-psychopy/book273700
